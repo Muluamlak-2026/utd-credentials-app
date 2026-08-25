@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Simple white keyhole glyph (circle + rectangle) centered in the
+     adaptive-icon safe zone, on the indigo background above; reads as
+     "credentials/key" at a glance without needing a raster icon. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,32 A18,18 0 1 1 53.99,32 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M45,58 L63,58 L63,76 L45,76 Z" />
+</vector>

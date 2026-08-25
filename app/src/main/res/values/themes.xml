@@ -1,0 +1,8 @@
+<resources>
+    <!-- Compose owns all real theming via UtdCredentialsTheme (Material3);
+         this XML theme only needs to exist so the Activity/Application tags
+         in the manifest have something valid to reference before Compose
+         takes over, and so the system splash/status bar aren't unstyled
+         for the first frame. -->
+    <style name="Theme.UtdCredentials" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>
