@@ -64,8 +64,28 @@ android {
         // ADB/Wireless Debugging pairing needed ever again. Also adds a
         // friendly "Retry" page in the WebView (FullSiteScreen) instead of
         // a blank screen when the server can't be reached.
-        versionCode = 6
-        versionName = "1.4.0"
+        // 1.4.1: v1.4.0's own new CrashHandler just did its job -- instead
+        // of another instant close, this device showed a full readable
+        // stack trace, and it named the exact real root cause:
+        //   IllegalArgumentException: Can only use lower 16 bits for
+        //   requestCode, thrown from FragmentActivity.checkForValidRequestCode
+        //   when MainActivity's POST_NOTIFICATIONS permission request runs.
+        // This is a known, documented AndroidX incompatibility: androidx.
+        // biometric 1.1.0 (needed for the app-lock fingerprint feature)
+        // transitively pulls in a very old androidx.fragment release whose
+        // FragmentActivity rejects any request code with bits set above
+        // 16 -- but the modern Activity Result API used for the
+        // notification-permission prompt deliberately generates request
+        // codes ABOVE that range so they can never collide with a
+        // hand-picked legacy one. Old fragment + new activity result API on
+        // the same FragmentActivity = guaranteed crash the very first time
+        // that permission prompt fires, on every device, every time. Fixed
+        // by pinning a current androidx.fragment-ktx explicitly below so
+        // Gradle resolves the fixed version instead of biometric's old
+        // transitive one (see dependencies block), plus a try/catch around
+        // the call itself in MainActivity.kt as a second line of defense.
+        versionCode = 7
+        versionName = "1.4.1"
     }
 
     buildTypes {
@@ -109,6 +129,16 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("androidx.biometric:biometric:1.1.0")
+
+    // 1.4.1: pinned explicitly to override the very old androidx.fragment
+    // that androidx.biometric:1.1.0 pulls in transitively -- that old
+    // version is the confirmed cause of the "Can only use lower 16 bits
+    // for requestCode" crash-on-launch (see the versionCode changelog
+    // comment above and MainActivity.kt's class doc comment for the full
+    // story). Gradle resolves a single version per artifact across the
+    // whole dependency graph, so declaring it here directly forces this
+    // fixed version to win over biometric's outdated request.
+    implementation("androidx.fragment:fragment-ktx:1.8.3")
 
     // Firebase Cloud Messaging -- push notifications for new payments /
     // registrations, exactly like the previous build. Requires a REAL

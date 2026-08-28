@@ -20,8 +20,28 @@ import com.healthdataet.utdcredentials.ui.theme.UtdCredentialsTheme
 // 1.1.0's BiometricPrompt needs a FragmentActivity/Fragment host to attach its
 // internal dialog fragment to; FragmentActivity itself still extends
 // ComponentActivity, so setContent/registerForActivityResult below are
-// unaffected. androidx.fragment is already on the classpath transitively via
-// the biometric dependency, no new Gradle dependency needed.
+// unaffected.
+//
+// 1.4.1: THIS was the real crash-on-launch root cause, finally captured
+// verbatim by v1.4.0's new CrashHandler instead of guessed at blind:
+//   java.lang.IllegalArgumentException: Can only use lower 16 bits for
+//   requestCode -- at FragmentActivity.checkForValidRequestCode, called from
+//   ComponentActivity's activityResultRegistry, called from THIS file's
+//   requestNotificationPermission.launch() below.
+// Root cause: androidx.biometric 1.1.0 transitively pulls in a very old
+// androidx.fragment (1.2.x), and that old FragmentActivity rejects any
+// request code with bits above 16 set. The modern Activity Result API
+// (registerForActivityResult, used below) deliberately generates request
+// codes ABOVE that range on purpose, so they can never collide with a
+// hand-picked legacy code -- a real, documented AndroidX incompatibility
+// between an old transitive androidx.fragment and the modern Activity
+// Result API, not a bug in this app's own logic. Fixed by pinning a
+// current androidx.fragment-ktx directly in build.gradle.kts (see its
+// dependencies block) so Gradle resolves the fixed version instead of
+// biometric's old transitive one. The try/catch below is added on top as
+// a second line of defense, same as every other pre-UI call in this
+// method -- so even an unrelated future OEM/platform quirk here degrades
+// to "no notification permission" instead of another crash-on-launch.
 class MainActivity : FragmentActivity() {
 
     // Android 13+ requires this to be requested at runtime before any
@@ -36,7 +56,15 @@ class MainActivity : FragmentActivity() {
         enableEdgeToEdge()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            try {
+                requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            } catch (e: Exception) {
+                // See the class doc comment above -- this specific call is
+                // the confirmed root cause of the earlier crash-on-launch.
+                // Fixed at the dependency level, but guarded here too: worst
+                // case without the permission is push notifications don't
+                // show, which is infinitely better than the app not opening.
+            }
         }
 
         // Create the 5 per-category channels (registration / trial start /
