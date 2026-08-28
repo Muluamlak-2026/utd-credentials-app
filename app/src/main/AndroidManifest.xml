@@ -28,7 +28,7 @@
             </intent-filter>
         </activity>
 
-        <!-- CrashHandler's recovery screen -- launched from a global
+        <!-- CrashHandler's recovery screen: launched from a global
              uncaught-exception handler, so it must be its own task and
              never require the app to already be in a working state. -->
         <activity
