@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.healthdataet.utdcredentials.ui.theme.UtdCredentialsTheme
+import com.healthdataet.utdcredentials.util.CrashHandler
 
 /**
  * Shown instead of a bare system "keeps stopping" dialog whenever
