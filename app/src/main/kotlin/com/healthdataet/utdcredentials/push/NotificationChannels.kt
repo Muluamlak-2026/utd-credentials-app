@@ -67,15 +67,28 @@ object NotificationChannels {
      * needed -- the admin can still override any of them from
      * SoundSettingsScreen (or Android's own per-channel notification
      * settings, Settings -> Apps -> UTD Credentials -> Notifications). */
-    fun defaultSoundFor(context: Context, category: String): Uri? = when (category) {
-        CATEGORY_REGISTRATION ->
-            RingtoneManager.getActualDefaultRingtoneUri(context, RingtoneManager.TYPE_NOTIFICATION)
-        CATEGORY_TRIAL_START ->
-            RingtoneManager.getActualDefaultRingtoneUri(context, RingtoneManager.TYPE_RINGTONE)
-        CATEGORY_EXPIRY ->
-            RingtoneManager.getActualDefaultRingtoneUri(context, RingtoneManager.TYPE_ALARM)
-        CATEGORY_PAYMENT -> secondNotificationSoundOrDefault(context)
-        else -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+    fun defaultSoundFor(context: Context, category: String): Uri? = try {
+        when (category) {
+            CATEGORY_REGISTRATION ->
+                RingtoneManager.getActualDefaultRingtoneUri(context, RingtoneManager.TYPE_NOTIFICATION)
+            CATEGORY_TRIAL_START ->
+                RingtoneManager.getActualDefaultRingtoneUri(context, RingtoneManager.TYPE_RINGTONE)
+            CATEGORY_EXPIRY ->
+                RingtoneManager.getActualDefaultRingtoneUri(context, RingtoneManager.TYPE_ALARM)
+            CATEGORY_PAYMENT -> secondNotificationSoundOrDefault(context)
+            else -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+        }
+    } catch (e: Exception) {
+        // Some OEM builds (notably some Samsung/One UI versions) can throw
+        // a SecurityException reading the system ringtone/alarm URI here.
+        // This runs unconditionally on every app launch (MainActivity.onCreate
+        // -> NotificationChannels.ensureAll), BEFORE any UI is shown -- an
+        // uncaught exception here previously meant an instant crash on start,
+        // with no chance to even see the login screen. A missing/unavailable
+        // default sound is not worth crashing the whole app over: the channel
+        // still gets created below, just silent, and the admin can pick a
+        // sound manually from Sound Settings afterward.
+        null
     }
 
     private fun secondNotificationSoundOrDefault(context: Context): Uri? {
@@ -97,12 +110,23 @@ object NotificationChannels {
      * already-existing channel with the same id is a no-op on Android. */
     fun ensureAll(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        val manager = context.getSystemService(NotificationManager::class.java) ?: return
-        val prefs = SoundPrefs(context)
-        for (category in CATEGORY_ORDER) {
-            if (manager.getNotificationChannel(category) != null) continue
-            val saved = prefs.getSoundUri(category)?.let { Uri.parse(it) }
-            createChannel(context, manager, category, saved ?: defaultSoundFor(context, category))
+        try {
+            val manager = context.getSystemService(NotificationManager::class.java) ?: return
+            val prefs = SoundPrefs(context)
+            for (category in CATEGORY_ORDER) {
+                try {
+                    if (manager.getNotificationChannel(category) != null) continue
+                    val saved = prefs.getSoundUri(category)?.let { Uri.parse(it) }
+                    createChannel(context, manager, category, saved ?: defaultSoundFor(context, category))
+                } catch (e: Exception) {
+                    // One category's channel failing to create must never
+                    // block the rest, and must never crash the app on start.
+                }
+            }
+        } catch (e: Exception) {
+            // Belt-and-suspenders: this runs unconditionally on every app
+            // launch before any UI is shown -- nothing here is worth
+            // crashing the whole app over.
         }
     }
 

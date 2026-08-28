@@ -36,8 +36,19 @@ android {
         // /api/v1/logout, /api/v1/device-token and
         // /api/v1/notifications/poll (see data/ApiClient.kt), none of which
         // changed. Bumped purely so "Update" still means something.
-        versionCode = 4
-        versionName = "1.3"
+        //
+        // 1.3.1 hotfix: this device's first-ever run of Round 32/33's
+        // notification channel setup (NotificationChannels.ensureAll,
+        // called unconditionally in MainActivity.onCreate before any UI
+        // shows) crashed instantly on launch -- RingtoneManager.
+        // getActualDefaultRingtoneUri() throws on some OEM builds (seen on
+        // this user's device) when reading the system ringtone/alarm URI.
+        // Fixed by wrapping that lookup (and the channel-creation loop, and
+        // both onCreate call sites) in try/catch so a missing/unreadable
+        // default sound degrades to a silent channel instead of crashing
+        // the whole app before it can even show the login screen.
+        versionCode = 5
+        versionName = "1.3.1"
     }
 
     buildTypes {

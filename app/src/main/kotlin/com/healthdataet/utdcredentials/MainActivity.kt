@@ -43,12 +43,25 @@ class MainActivity : FragmentActivity() {
         // expiry / payment / general) as early as possible, each with its
         // own distinct default sound -- so even a push that arrives before
         // the admin ever opens Notification Sounds still rings correctly.
-        NotificationChannels.ensureAll(applicationContext)
+        // Wrapped: this runs before setContent, i.e. before any UI shows --
+        // an uncaught exception here previously meant an instant crash on
+        // every launch with no screen ever appearing (fixed round: some OEM
+        // builds throw reading the system default ringtone/alarm URI).
+        try {
+            NotificationChannels.ensureAll(applicationContext)
+        } catch (e: Exception) {
+            // Notification setup is never worth crashing the whole app over.
+        }
 
         // Round 32: the ~15-minute WorkManager backstop that keeps alerting
         // even when the app isn't open at all -- see NotificationPollWorker's
         // doc comment. Safe/cheap to call on every launch (KEEP policy).
-        NotificationPollWorker.schedule(applicationContext)
+        try {
+            NotificationPollWorker.schedule(applicationContext)
+        } catch (e: Exception) {
+            // Same reasoning -- background poll scheduling must never block
+            // the app from actually opening.
+        }
 
         setContent {
             UtdCredentialsTheme {
