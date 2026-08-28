@@ -9,6 +9,7 @@
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
     <application
+        android:name=".UtdCredentialsApp"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -26,6 +27,15 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- CrashHandler's recovery screen -- launched from a global
+             uncaught-exception handler, so it must be its own task and
+             never require the app to already be in a working state. -->
+        <activity
+            android:name=".CrashReportActivity"
+            android:exported="false"
+            android:theme="@style/Theme.UtdCredentials"
+            android:launchMode="singleTask" />
 
         <service
             android:name=".push.UtdFirebaseMessagingService"

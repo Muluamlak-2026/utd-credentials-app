@@ -46,7 +46,12 @@ import com.healthdataet.utdcredentials.data.AppearancePrefs
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AppSettingsScreen(onBack: () -> Unit, onOpenNotifications: () -> Unit, onOpenSecurity: () -> Unit) {
+fun AppSettingsScreen(
+    onBack: () -> Unit,
+    onOpenNotifications: () -> Unit,
+    onOpenSecurity: () -> Unit,
+    onOpenDiagnostics: () -> Unit
+) {
     val context = LocalContext.current
     val appearancePrefs = remember { AppearancePrefs(context) }
     var refreshTick by remember { mutableStateOf(0) }
@@ -82,6 +87,12 @@ fun AppSettingsScreen(onBack: () -> Unit, onOpenNotifications: () -> Unit, onOpe
                 title = "Security",
                 subtitle = "Site password auto-fill, PIN / pattern / fingerprint app lock",
                 onClick = onOpenSecurity
+            )
+            HorizontalDivider()
+            SettingsLinkRow(
+                title = "Diagnostics",
+                subtitle = "View saved crash logs, if this app has ever run into a problem",
+                onClick = onOpenDiagnostics
             )
             HorizontalDivider()
 

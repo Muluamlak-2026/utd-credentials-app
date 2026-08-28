@@ -47,8 +47,25 @@ android {
         // both onCreate call sites) in try/catch so a missing/unreadable
         // default sound degrades to a silent channel instead of crashing
         // the whole app before it can even show the login screen.
-        versionCode = 5
-        versionName = "1.3.1"
+        //
+        // 1.4.0: the 1.3.1 guard alone wasn't enough to stop this device's
+        // crash-on-launch, meaning something else uncaught is also at
+        // fault -- rather than guess a third specific line, this release
+        // adds a real global safety net: a custom Application
+        // (UtdCredentialsApp) installs a Thread.setDefaultUncaughtExceptionHandler
+        // (util/CrashHandler.kt) BEFORE any Activity even starts. From now
+        // on, ANY uncaught exception anywhere in the app writes a full
+        // stack trace to a local file and relaunches straight into
+        // CrashReportActivity showing it -- selectable/copyable, right on
+        // the phone -- instead of the OS's bare "keeps stopping" dialog.
+        // Past crash logs stay readable afterward too, from the new
+        // Diagnostics entry under App Settings. This turns any future
+        // crash into something fixable from a single screenshot, with no
+        // ADB/Wireless Debugging pairing needed ever again. Also adds a
+        // friendly "Retry" page in the WebView (FullSiteScreen) instead of
+        // a blank screen when the server can't be reached.
+        versionCode = 6
+        versionName = "1.4.0"
     }
 
     buildTypes {

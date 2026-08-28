@@ -17,6 +17,7 @@ import androidx.navigation.compose.rememberNavController
 import com.healthdataet.utdcredentials.data.AppLockPrefs
 import com.healthdataet.utdcredentials.data.SessionManager
 import com.healthdataet.utdcredentials.ui.screens.AppSettingsScreen
+import com.healthdataet.utdcredentials.ui.screens.CrashLogScreen
 import com.healthdataet.utdcredentials.ui.screens.FullSiteScreen
 import com.healthdataet.utdcredentials.ui.screens.LockScreen
 import com.healthdataet.utdcredentials.ui.screens.LoginScreen
@@ -28,6 +29,7 @@ private const val ROUTE_SITE = "site"
 private const val ROUTE_APP_SETTINGS = "app_settings"
 private const val ROUTE_SOUNDS = "sounds"
 private const val ROUTE_SECURITY = "security"
+private const val ROUTE_DIAGNOSTICS = "diagnostics"
 
 /**
  * Destinations under the actual nav graph, plus a lock gate that sits
@@ -98,7 +100,8 @@ fun AppNavHost() {
             AppSettingsScreen(
                 onBack = { navController.popBackStack() },
                 onOpenNotifications = { navController.navigate(ROUTE_SOUNDS) },
-                onOpenSecurity = { navController.navigate(ROUTE_SECURITY) }
+                onOpenSecurity = { navController.navigate(ROUTE_SECURITY) },
+                onOpenDiagnostics = { navController.navigate(ROUTE_DIAGNOSTICS) }
             )
         }
         composable(ROUTE_SOUNDS) {
@@ -106,6 +109,9 @@ fun AppNavHost() {
         }
         composable(ROUTE_SECURITY) {
             SecuritySettingsScreen(onBack = { navController.popBackStack() })
+        }
+        composable(ROUTE_DIAGNOSTICS) {
+            CrashLogScreen(onBack = { navController.popBackStack() })
         }
     }
 }

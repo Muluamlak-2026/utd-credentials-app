@@ -4,6 +4,8 @@ import android.annotation.SuppressLint
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -265,6 +267,29 @@ fun FullSiteScreen(
                                 }
                             }
                         }
+
+                        // A friendly "can't reach the server" page instead of
+                        // the WebView's own blank white screen (or a cryptic
+                        // browser error page) whenever the main page itself
+                        // fails to load -- a sub-resource failing (one image,
+                        // one script) must never replace real page content,
+                        // hence the isForMainFrame check.
+                        override fun onReceivedError(
+                            view: WebView,
+                            request: WebResourceRequest,
+                            error: WebResourceError
+                        ) {
+                            super.onReceivedError(view, request, error)
+                            if (request.isForMainFrame) {
+                                view.loadDataWithBaseURL(
+                                    null,
+                                    connectionErrorHtml(session.baseUrl + "/admin/login", error.description?.toString()),
+                                    "text/html",
+                                    "utf-8",
+                                    null
+                                )
+                            }
+                        }
                     }
                     loadUrl(session.baseUrl + "/admin/login")
                     webViewRef = this
@@ -295,4 +320,31 @@ fun FullSiteScreen(
             }
         }
     }
+}
+
+/**
+ * A plain, dependency-free HTML string (no JS bridge needed) shown in
+ * place of the WebView's own blank/cryptic error page whenever the main
+ * admin panel page fails to load -- offline, DNS hiccup, server restart,
+ * etc. Tapping "Retry" is a normal link tap: the WebView's default
+ * behavior navigates it like any other link, so no special handling is
+ * needed to actually retry.
+ */
+private fun connectionErrorHtml(retryUrl: String, detail: String?): String {
+    val safeDetail = (detail ?: "").replace("<", "&lt;").replace(">", "&gt;")
+    return """
+        <html>
+        <head><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+        <body style="font-family:sans-serif;padding:32px 24px;text-align:center;color:#333;">
+            <div style="font-size:48px;margin-bottom:8px;">&#128268;</div>
+            <h2 style="margin:0 0 8px;">Can't reach the admin panel</h2>
+            <p style="color:#666;margin:0 0 24px;">
+                Check your internet connection, then try again.
+                ${if (safeDetail.isNotBlank()) "<br><small>($safeDetail)</small>" else ""}
+            </p>
+            <a href="$retryUrl" style="display:inline-block;padding:12px 28px;background:#6366F1;
+                color:#fff;text-decoration:none;border-radius:8px;font-weight:bold;">Retry</a>
+        </body>
+        </html>
+    """.trimIndent()
 }
