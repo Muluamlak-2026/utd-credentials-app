@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -44,7 +45,11 @@ import com.google.firebase.messaging.FirebaseMessaging
 import com.healthdataet.utdcredentials.data.ApiClient
 import com.healthdataet.utdcredentials.data.PendingWebLogin
 import com.healthdataet.utdcredentials.data.SessionManager
+import com.healthdataet.utdcredentials.data.SiteCredsStore
+import com.healthdataet.utdcredentials.push.NotificationChannels
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
@@ -68,8 +73,13 @@ import org.json.JSONArray
 @SuppressLint("SetJavaScriptEnabled")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FullSiteScreen(session: SessionManager, onLoggedOut: () -> Unit) {
+fun FullSiteScreen(
+    session: SessionManager,
+    onLoggedOut: () -> Unit,
+    onOpenAppSettings: () -> Unit
+) {
     val context = LocalContext.current
+    val siteCredsStore = remember { SiteCredsStore(context) }
     val scope = rememberCoroutineScope()
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var canGoBack by remember { mutableStateOf(false) }
@@ -81,33 +91,48 @@ fun FullSiteScreen(session: SessionManager, onLoggedOut: () -> Unit) {
         webViewRef?.let { if (it.canGoBack()) it.goBack() }
     }
 
-    fun pollNotifications() {
+    // Round 32: this used to run exactly once (LaunchedEffect(Unit), no
+    // loop) and only ever updated the in-app badge/dialog above -- it never
+    // called NotificationManager.notify() at all. That combination is the
+    // confirmed root cause of "inbuilt notification system doesn't alert
+    // me": nothing rang or showed in the system tray unless Firebase also
+    // happened to be configured. Now it (a) actually posts a real system
+    // notification per new item, through the exact same
+    // NotificationChannels logic FCM and the WorkManager backstop use, and
+    // (b) skips anything with id <= lastNotificationId, so an item already
+    // shown via FCM (see UtdFirebaseMessagingService's notif_id handling)
+    // or the background worker is never shown a second time here.
+    suspend fun pollNotifications() {
         val token = session.apiToken ?: return
-        scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                ApiClient(session.baseUrl).pollNotifications(token, session.lastNotificationId)
-            }
-            if (result.ok && result.json != null) {
-                val arr: JSONArray = result.json.optJSONArray("notifications") ?: JSONArray()
-                if (arr.length() > 0) {
-                    val items = mutableListOf<String>()
-                    var maxId = session.lastNotificationId
-                    for (i in 0 until arr.length()) {
-                        val n = arr.optJSONObject(i) ?: continue
-                        items.add(n.optString("message").ifBlank { n.optString("title", "New notification") })
-                        val id = n.optLong("id", 0L)
-                        if (id > maxId) maxId = id
+        val result = withContext(Dispatchers.IO) {
+            ApiClient(session.baseUrl).pollNotifications(token, session.lastNotificationId)
+        }
+        if (result.ok && result.json != null) {
+            val arr: JSONArray = result.json.optJSONArray("notifications") ?: JSONArray()
+            if (arr.length() > 0) {
+                val items = mutableListOf<String>()
+                var maxId = session.lastNotificationId
+                for (i in 0 until arr.length()) {
+                    val n = arr.optJSONObject(i) ?: continue
+                    val id = n.optLong("id", 0L)
+                    val title = n.optString("title").ifBlank { "UTD Credentials" }
+                    val body = n.optString("body").ifBlank { "New notification" }
+                    items.add(body)
+                    if (id > session.lastNotificationId) {
+                        NotificationChannels.postSystemNotification(
+                            context, title, body, n.optString("category"), id.toInt()
+                        )
                     }
-                    session.lastNotificationId = maxId
-                    notifItems = items + notifItems
-                    notificationCount += items.size
+                    if (id > maxId) maxId = id
                 }
+                session.lastNotificationId = maxId
+                notifItems = items + notifItems
+                notificationCount += items.size
             }
         }
     }
 
     LaunchedEffect(Unit) {
-        pollNotifications()
         // Make sure THIS device's current FCM token is registered even if
         // onNewToken never fires again this session (e.g. it was already
         // generated before this login happened).
@@ -124,6 +149,21 @@ fun FullSiteScreen(session: SessionManager, onLoggedOut: () -> Unit) {
                 // before Firebase is configured for real, see
                 // TERMUX_SETUP.md Part D).
             }
+        }
+
+        // Repeating foreground poll -- fires immediately, then every 30s
+        // for as long as this screen is on-screen and composed. The
+        // WorkManager worker (NotificationPollWorker, every ~15 min) is
+        // the backstop for when the app isn't open at all; this is the
+        // fast path for while an admin is actually using the app.
+        while (isActive) {
+            try {
+                pollNotifications()
+            } catch (e: Exception) {
+                // A single failed poll (offline, server hiccup) must never
+                // kill the loop -- just try again next tick.
+            }
+            delay(30_000L)
         }
     }
 
@@ -144,6 +184,9 @@ fun FullSiteScreen(session: SessionManager, onLoggedOut: () -> Unit) {
                     }
                     IconButton(onClick = { webViewRef?.reload() }) {
                         Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
+                    }
+                    IconButton(onClick = onOpenAppSettings) {
+                        Icon(Icons.Filled.Settings, contentDescription = "App Settings")
                     }
                     IconButton(onClick = {
                         val apiToken = session.apiToken
@@ -193,12 +236,16 @@ fun FullSiteScreen(session: SessionManager, onLoggedOut: () -> Unit) {
                         override fun onPageFinished(view: WebView, url: String?) {
                             super.onPageFinished(view, url)
                             canGoBack = view.canGoBack()
-                            // Auto-fill + submit the web login form ONCE,
-                            // right after the native /api/v1/login already
-                            // succeeded with these same credentials -- see
-                            // PendingWebLogin's doc comment.
+                            // Round 32: auto-fill + submit the web login form
+                            // every time this screen lands on /admin/login --
+                            // not just once right after a fresh native login.
+                            // PendingWebLogin.consume() still wins when it has
+                            // something (the just-typed password, freshest
+                            // and guaranteed correct); SiteCredsStore is the
+                            // persisted fallback for every later visit --
+                            // session-expiry redirects, app restarts, etc.
                             if (url != null && url.contains("/admin/login")) {
-                                val pending = PendingWebLogin.consume()
+                                val pending = PendingWebLogin.consume() ?: siteCredsStore.get()
                                 if (pending != null) {
                                     val (u, p) = pending
                                     val escapedUser = u.replace("\\", "\\\\").replace("\"", "\\\"")

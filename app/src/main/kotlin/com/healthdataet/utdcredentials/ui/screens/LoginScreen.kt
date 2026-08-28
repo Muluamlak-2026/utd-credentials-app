@@ -2,6 +2,7 @@ package com.healthdataet.utdcredentials.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -12,6 +13,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -22,22 +24,31 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.healthdataet.utdcredentials.data.ApiClient
 import com.healthdataet.utdcredentials.data.PendingWebLogin
 import com.healthdataet.utdcredentials.data.SessionManager
+import com.healthdataet.utdcredentials.data.SiteCredsStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
 fun LoginScreen(session: SessionManager, onLoggedIn: () -> Unit) {
+    val context = LocalContext.current
+    val siteCredsStore = remember { SiteCredsStore(context) }
     var baseUrl by remember { mutableStateOf(session.baseUrl) }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    // Round 32 ("site password save"): on by default -- most admins want the
+    // embedded web panel to auto-fill every time, and can turn it off here
+    // or clear it later from Security settings.
+    var rememberSitePassword by remember { mutableStateOf(true) }
     var loading by remember { mutableStateOf(false) }
     var errorText by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -82,6 +93,12 @@ fun LoginScreen(session: SessionManager, onLoggedIn: () -> Unit) {
             modifier = Modifier.fillMaxWidth()
         )
 
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(checked = rememberSitePassword, onCheckedChange = { rememberSitePassword = it })
+            Text("Save password for automatic web login", style = MaterialTheme.typography.bodySmall)
+        }
+
         if (errorText != null) {
             Spacer(Modifier.height(12.dp))
             Text(errorText ?: "", color = MaterialTheme.colorScheme.error)
@@ -111,6 +128,14 @@ fun LoginScreen(session: SessionManager, onLoggedIn: () -> Unit) {
                         // second time for the WebView's separate session.
                         PendingWebLogin.username = username
                         PendingWebLogin.password = password
+                        // Round 32: persist (or forget) the site password so
+                        // FullSiteScreen can keep auto-filling /admin/login
+                        // on every later visit too, not just this one.
+                        if (rememberSitePassword) {
+                            siteCredsStore.save(username, password)
+                        } else {
+                            siteCredsStore.clear()
+                        }
                         onLoggedIn()
                     } else {
                         errorText = result.error ?: "Login failed -- check your username and password."

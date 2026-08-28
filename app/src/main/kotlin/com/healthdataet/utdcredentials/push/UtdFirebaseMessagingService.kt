@@ -1,22 +1,12 @@
 package com.healthdataet.utdcredentials.push
 
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
-import android.content.Intent
-import android.os.Build
-import androidx.core.app.NotificationCompat
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
-import com.healthdataet.utdcredentials.MainActivity
-import com.healthdataet.utdcredentials.R
 import com.healthdataet.utdcredentials.data.ApiClient
 import com.healthdataet.utdcredentials.data.SessionManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-
-private const val CHANNEL_ID = "utd_credentials_alerts"
 
 class UtdFirebaseMessagingService : FirebaseMessagingService() {
 
@@ -32,33 +22,28 @@ class UtdFirebaseMessagingService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
         super.onMessageReceived(message)
+        // The server sends DATA-ONLY messages on purpose (see admin/push.py's
+        // comment) precisely so this always runs, in every app state --
+        // title/body/type all come from `data`, never from `notification`.
         val title = message.notification?.title ?: message.data["title"] ?: "UTD Credentials"
         val body = message.notification?.body ?: message.data["body"] ?: ""
-        showNotification(title, body)
-    }
+        val serverType = message.data["type"]
 
-    private fun showNotification(title: String, body: String) {
-        val manager = getSystemService(NotificationManager::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID, "Admin alerts", NotificationManager.IMPORTANCE_HIGH
-            )
-            manager?.createNotificationChannel(channel)
+        // Round 32: when the server includes the admin_notifications row id
+        // (data["notif_id"], added in push.py alongside this round's Kotlin
+        // changes), use it as the stable system-notification id AND advance
+        // the same lastNotificationId watermark the poll path uses -- so an
+        // event delivered via FCM first is never shown again a few seconds
+        // later when the next poll also sees it. Older server builds that
+        // don't send notif_id yet fall back to a random id (still shows
+        // correctly, just without cross-path dedup).
+        val notifIdField = message.data["notif_id"]?.toLongOrNull()
+        val session = SessionManager(applicationContext)
+        if (notifIdField != null && notifIdField > session.lastNotificationId) {
+            session.lastNotificationId = notifIdField
         }
-        val intent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-        }
-        val pendingIntent = PendingIntent.getActivity(
-            this, 0, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(title)
-            .setContentText(body)
-            .setAutoCancel(true)
-            .setContentIntent(pendingIntent)
-            .build()
-        manager?.notify(System.currentTimeMillis().toInt(), notification)
+        val systemNotifId = notifIdField?.toInt() ?: System.currentTimeMillis().toInt()
+
+        NotificationChannels.postSystemNotification(applicationContext, title, body, serverType, systemNotifId)
     }
 }

@@ -13,8 +13,31 @@ android {
         applicationId = "com.healthdataet.utdcredentials"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        // Round 33 (per-category notification on/off + App Settings/appearance)
+        // shipped without a version bump -- bumping here so "Update" in
+        // Android's installer (and Settings -> Apps -> UTD Credentials ->
+        // version) actually reflects that this is a newer build than the
+        // very first install, instead of every round looking like "1.0"
+        // forever regardless of how many updates have actually shipped.
+        //
+        // Round 35: bumped again even though no Kotlin source changed. This
+        // app's admin panel screen (FullSiteScreen.kt) is a WebView onto the
+        // live site -- the new Dashboard "Needs Approval" list and the
+        // click-to-copy/profile-link consistency fixes from Round 35 show up
+        // automatically the next time the WebView loads, with zero app code
+        // changes needed. The bump exists only so "Update" on the phone
+        // still means something each round.
+        //
+        // Round 37: same story again. Verified phone-number changes, the
+        // Settings -> Account Self-Service toggles, and the Mini App's
+        // animated reveal popups are all either admin-panel (WebView) or
+        // Telegram Mini App / bot-chat surfaces -- none of them touch this
+        // app's native code, which only ever talks to /api/v1/login,
+        // /api/v1/logout, /api/v1/device-token and
+        // /api/v1/notifications/poll (see data/ApiClient.kt), none of which
+        // changed. Bumped purely so "Update" still means something.
+        versionCode = 4
+        versionName = "1.3"
     }
 
     buildTypes {
@@ -50,6 +73,14 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.8.0")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
+
+    // Round 32: reliable notifications need a background poll even when the
+    // app isn't open (WorkManager), site-password auto-fill needs encrypted
+    // on-device storage, and the app-lock feature needs BiometricPrompt for
+    // fingerprint unlock.
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("androidx.biometric:biometric:1.1.0")
 
     // Firebase Cloud Messaging -- push notifications for new payments /
     // registrations, exactly like the previous build. Requires a REAL
