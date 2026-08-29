@@ -31,6 +31,41 @@ class SessionManager(context: Context) {
         get() = prefs.getString(KEY_FCM_TOKEN, null)
         set(value) = prefs.edit().putString(KEY_FCM_TOKEN, value).apply()
 
+    /**
+     * Round 42: the in-app bell badge's actual data source. Previously the
+     * badge (FullSiteScreen's `notificationCount`) was a plain Compose
+     * `remember` variable local to that one screen, so it only ever
+     * reflected THAT screen's own foreground poll loop -- the WorkManager
+     * backstop (NotificationPollWorker) and Firebase
+     * (UtdFirebaseMessagingService) could both successfully show a real
+     * system notification and the badge would still never move, since
+     * neither of them touched that local state (and couldn't -- it isn't
+     * shared, and generally isn't even alive while the app is backgrounded
+     * or closed). Backed by the same shared SharedPreferences file as
+     * [lastNotificationId]/[fcmToken] above, so it's readable/writable from
+     * any process/component, exactly like those two already are.
+     *
+     * Written from [incrementUnreadNotificationCount], called once from
+     * NotificationChannels.postSystemNotification -- the single function
+     * FCM, the foreground poll loop, and the WorkManager worker all funnel
+     * through -- so all three now feed the same counter FullSiteScreen's
+     * bell displays, instead of three disconnected pieces of state.
+     */
+    var unreadNotificationCount: Int
+        get() = prefs.getInt(KEY_UNREAD_COUNT, 0)
+        set(value) = prefs.edit().putInt(KEY_UNREAD_COUNT, value).apply()
+
+    /** Bumps [unreadNotificationCount] by one. Synchronized on the class
+     * (not `this` -- a new SessionManager is constructed at every call
+     * site) so two notifications landing at nearly the same moment from
+     * different components (e.g. a poll tick and an FCM message) in this
+     * single-process app don't race and lose an increment. */
+    fun incrementUnreadNotificationCount() {
+        synchronized(SessionManager::class.java) {
+            unreadNotificationCount = unreadNotificationCount + 1
+        }
+    }
+
     val isLoggedIn: Boolean
         get() = !apiToken.isNullOrBlank()
 
@@ -46,6 +81,7 @@ class SessionManager(context: Context) {
         private const val KEY_TOKEN = "api_token"
         private const val KEY_LAST_NOTIF_ID = "last_notification_id"
         private const val KEY_FCM_TOKEN = "fcm_token"
+        private const val KEY_UNREAD_COUNT = "unread_notification_count"
         const val DEFAULT_BASE_URL = "https://bot.healthdataet.com"
     }
 }

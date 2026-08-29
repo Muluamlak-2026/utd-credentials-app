@@ -14,6 +14,7 @@ import androidx.core.app.NotificationManagerCompat
 import com.healthdataet.utdcredentials.MainActivity
 import com.healthdataet.utdcredentials.R
 import com.healthdataet.utdcredentials.data.NotificationPrefs
+import com.healthdataet.utdcredentials.data.SessionManager
 import com.healthdataet.utdcredentials.data.SoundPrefs
 
 /**
@@ -177,6 +178,20 @@ object NotificationChannels {
         // loop, and the WorkManager backstop alike, since all three call
         // this one function.
         if (!NotificationPrefs(context).isEnabled(channelId)) return
+
+        // Round 42: bump the in-app bell's shared badge counter here too --
+        // same reasoning as the enable check above, this is the one place
+        // FCM/poll/WorkManager all funnel through, so this is the one place
+        // that can update a counter all three actually share (see
+        // SessionManager.unreadNotificationCount; FullSiteScreen reads it
+        // instead of keeping its own disconnected local count). Deliberately
+        // BEFORE the notify() call/try-catch below: the in-app badge needs
+        // no OS permission at all, so it must not depend on the system-tray
+        // notify() call actually succeeding (e.g. POST_NOTIFICATIONS denied)
+        // -- otherwise a denied permission would silently break the badge
+        // the exact same way as the bug this fixes.
+        SessionManager(context).incrementUnreadNotificationCount()
+
         ensureAll(context)
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK

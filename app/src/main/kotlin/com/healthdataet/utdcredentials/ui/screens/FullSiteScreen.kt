@@ -121,6 +121,12 @@ fun FullSiteScreen(
                     val body = n.optString("body").ifBlank { "New notification" }
                     items.add(body)
                     if (id > session.lastNotificationId) {
+                        // This is also what bumps the shared unread-badge
+                        // counter now (Round 42, see
+                        // SessionManager.unreadNotificationCount) -- the
+                        // re-sync just below picks that up, the same way it
+                        // picks up whatever the WorkManager backstop or FCM
+                        // added while this screen wasn't the one polling.
                         NotificationChannels.postSystemNotification(
                             context, title, body, n.optString("category"), id.toInt()
                         )
@@ -129,9 +135,16 @@ fun FullSiteScreen(
                 }
                 session.lastNotificationId = maxId
                 notifItems = items + notifItems
-                notificationCount += items.size
             }
         }
+        // Round 42: re-sync the visible badge from the shared counter on
+        // every poll tick (success or failure alike, and even when this
+        // particular poll found nothing new) -- this is what actually
+        // surfaces anything NotificationPollWorker or
+        // UtdFirebaseMessagingService posted while this exact screen wasn't
+        // the one doing the polling, since all three paths now share one
+        // counter instead of each keeping their own.
+        notificationCount = session.unreadNotificationCount
     }
 
     LaunchedEffect(Unit) {
@@ -177,6 +190,11 @@ fun FullSiteScreen(
                     IconButton(onClick = {
                         showNotifDialog = true
                         notificationCount = 0
+                        // Clear the shared counter too, not just the local
+                        // display -- otherwise the next poll's re-sync
+                        // (above) would immediately bring the badge right
+                        // back with the same already-seen count.
+                        session.unreadNotificationCount = 0
                     }) {
                         BadgedBox(badge = {
                             if (notificationCount > 0) Badge { Text(notificationCount.toString()) }

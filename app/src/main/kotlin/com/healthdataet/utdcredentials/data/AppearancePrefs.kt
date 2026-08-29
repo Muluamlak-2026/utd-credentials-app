@@ -2,6 +2,8 @@ package com.healthdataet.utdcredentials.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Round 33's "brightness, background, app logo" ask, scoped to what an
@@ -19,14 +21,48 @@ class AppearancePrefs(context: Context) {
     private val prefs: SharedPreferences =
         context.applicationContext.getSharedPreferences("utd_credentials_appearance_prefs", Context.MODE_PRIVATE)
 
+    init {
+        // Round 42 fix: every AppearancePrefs instance -- there are several,
+        // one per screen/composable that touches appearance -- syncs the
+        // shared, process-wide StateFlows below from whatever is actually
+        // on disk. That's what lets ui/theme/Theme.kt's root composable
+        // observe changes made from a completely different instance (e.g.
+        // AppSettingsScreen's) via collectAsState(), instead of only ever
+        // seeing the value that was current when IT was constructed.
+        // Re-assigning a StateFlow to its current value is a no-op for
+        // collectors (StateFlow conflates by equality), so this is safe to
+        // run on every construction, not just the first.
+        themeModeFlow.value = prefs.getString(KEY_THEME_MODE, THEME_SYSTEM) ?: THEME_SYSTEM
+        accentKeyFlow.value = prefs.getString(KEY_ACCENT, ACCENT_INDIGO) ?: ACCENT_INDIGO
+    }
+
+    /**
+     * Round 42 fix: previously these read/wrote SharedPreferences directly.
+     * That persisted correctly, but nothing about a plain SharedPreferences
+     * read is observable to Compose -- so ui/theme/Theme.kt's root
+     * MaterialTheme wrapper, which read these same properties, had no way
+     * to know a value had changed and never recomposed. The only thing
+     * that visibly updated was AppSettingsScreen's own local preview
+     * (its `refreshTick` remember-state), which is the "only demo colour
+     * changes" bug. Routing both properties through the shared StateFlows
+     * below -- still backed by, and still persisted to, the same
+     * SharedPreferences -- makes a change collectAsState()-observable
+     * from any screen, live, with no restart required.
+     */
     var themeMode: String
-        get() = prefs.getString(KEY_THEME_MODE, THEME_SYSTEM) ?: THEME_SYSTEM
-        set(value) = prefs.edit().putString(KEY_THEME_MODE, value).apply()
+        get() = themeModeFlow.value
+        set(value) {
+            prefs.edit().putString(KEY_THEME_MODE, value).apply()
+            themeModeFlow.value = value
+        }
 
     /** One of ACCENT_ORDER's keys. */
     var accentKey: String
-        get() = prefs.getString(KEY_ACCENT, ACCENT_INDIGO) ?: ACCENT_INDIGO
-        set(value) = prefs.edit().putString(KEY_ACCENT, value).apply()
+        get() = accentKeyFlow.value
+        set(value) {
+            prefs.edit().putString(KEY_ACCENT, value).apply()
+            accentKeyFlow.value = value
+        }
 
     companion object {
         private const val KEY_THEME_MODE = "theme_mode"
@@ -64,5 +100,18 @@ class AppearancePrefs(context: Context) {
             ACCENT_RED -> 0xFFDC2626
             else -> 0xFF6366F1
         }
+
+        // Round 42 fix: process-wide (one per app process, not one per
+        // AppearancePrefs instance -- companion object members are shared
+        // across every instance) so a write made through ANY instance is
+        // visible, live, to a collectAsState() call anywhere else in the
+        // Compose tree. Kept private + exposed as read-only StateFlow so
+        // nothing outside this class can push a value that skips writing
+        // through to SharedPreferences via the setters above.
+        private val themeModeFlow = MutableStateFlow(THEME_SYSTEM)
+        private val accentKeyFlow = MutableStateFlow(ACCENT_INDIGO)
+
+        val themeModeState: StateFlow<String> get() = themeModeFlow
+        val accentKeyState: StateFlow<String> get() = accentKeyFlow
     }
 }

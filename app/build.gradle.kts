@@ -84,8 +84,15 @@ android {
         // Gradle resolves the fixed version instead of biometric's old
         // transitive one (see dependencies block), plus a try/catch around
         // the call itself in MainActivity.kt as a second line of defense.
-        versionCode = 7
-        versionName = "1.4.1"
+        // v1.4.2 (Round 42): theme selection now actually applies app-wide
+        // live (was persisting correctly but never observable to Compose,
+        // so only the Settings screen's own preview swatch ever visibly
+        // changed -- see ui/theme/Theme.kt / data/AppearancePrefs.kt), and
+        // the in-app bell badge now shares one real counter across FCM/poll/
+        // WorkManager instead of three disconnected pieces of state (see
+        // data/SessionManager.kt / push/NotificationChannels.kt).
+        versionCode = 8
+        versionName = "1.4.2"
     }
 
     buildTypes {
