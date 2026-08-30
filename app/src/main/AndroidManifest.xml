@@ -58,5 +58,26 @@
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />
             </intent-filter>
         </service>
+
+        <!-- Round 48p: the final, coordinate-free fallback for the Sign
+             In/Continue click problem -- see
+             UtdClickAccessibilityService's own doc comment. Must be
+             exported with BIND_ACCESSIBILITY_SERVICE (the only permission
+             the OS accepts for this) so the system Settings/Accessibility
+             screen can bind to it; utd_accessibility_service_config.xml's
+             packageNames restricts what it can ever see to this app alone,
+             and it only runs once the admin manually enables it once in
+             Settings -- never silently. -->
+        <service
+            android:name=".accessibility.UtdClickAccessibilityService"
+            android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/utd_accessibility_service_config" />
+        </service>
     </application>
 </manifest>

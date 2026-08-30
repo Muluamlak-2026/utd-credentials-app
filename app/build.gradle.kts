@@ -308,8 +308,45 @@ android {
         // -- focus the button, then a real ENTER key event -- instead of
         // repeating the same coordinate tap a third time; a THIRD attempt
         // (if still stuck) taps again, offset a few px from dead-center.
-        versionCode = 26
-        versionName = "1.4.20"
+        // Round 48p (final round, per explicit request to close this
+        // project): (1) THE definitive Sign In/Continue click fix -- a new
+        // UtdClickAccessibilityService walks the real accessibility node
+        // tree Chromium exposes for the page (the same tree TalkBack reads)
+        // and calls performAction(ACTION_CLICK) directly on the button's own
+        // node, sidestepping coordinates and synthetic-event mechanics
+        // entirely; tried FIRST for Sign In/Continue specifically (never
+        // cookies/popup, which already worked), falling back to the
+        // existing tap/key-press chain if it's off or doesn't find the
+        // button. Requires the admin to manually enable it once in
+        // Settings > Accessibility (Android requires this for every
+        // accessibility service, no silent path exists) -- a new status
+        // card on the credential picker screen shows ON/OFF and links
+        // straight to that settings screen. Scoped via packageNames so it
+        // can only ever see this app's own content, nothing else on the
+        // phone. (2) Export CSV on the Credentials Hub page was failing
+        // with "Couldn't start the download" -- root cause: it used a
+        // blob: URL, which Android's DownloadManager can only ever reject
+        // (it only fetches plain http/https URLs), unlike every other
+        // working export button on the site which already used a real URL.
+        // Fixed on the website side to POST through a normal server route
+        // instead, matching those. (3) Recovered the existing (but
+        // Users-panel-only) "clear this client's bot conversation" action
+        // and added it in two more places: a bulk "Delete Chat History"
+        // button on the Credentials Hub table (for selected rows with a
+        // linked client), and a single button on each client's own profile
+        // page next to Message History -- website-only, no app changes.
+        // (4) Weak-network stability: ATTEMPT_TIMEOUT_MS raised 55s -> 75s
+        // (a slow-but-still-working page load was being cut off and
+        // wrongly reported as a timed-out login test); ApiClient's OkHttp
+        // timeouts raised 15s -> 30s for the same reason on every server
+        // call (login test reporting, credential list, etc.); FullSiteScreen
+        // now auto-retries the first two consecutive main-frame load
+        // failures (with a short increasing delay) before showing the
+        // "can't reach the server" screen, instead of giving up on the very
+        // first transient blip -- likely the real cause of the reported
+        // "page reloading instabilities" on a weak connection.
+        versionCode = 27
+        versionName = "1.4.21"
         buildConfigField("String", "GIT_SHA", "\"${gitShaForBuild()}\"")
     }
 

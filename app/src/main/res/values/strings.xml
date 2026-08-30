@@ -1,3 +1,6 @@
 <resources>
     <string name="app_name">UTD Credentials</string>
+    <!-- Round 48p: shown to the admin on the system Accessibility Settings
+         screen when deciding whether to enable this. -->
+    <string name="utd_accessibility_service_description">Lets UTD Credentials click the Sign In/Continue button on uptodate.com\'s login page during automated sign-in tests, when it would otherwise need to be tapped by hand. Only active while this app itself is on screen -- it never sees or acts on any other app.</string>
 </resources>

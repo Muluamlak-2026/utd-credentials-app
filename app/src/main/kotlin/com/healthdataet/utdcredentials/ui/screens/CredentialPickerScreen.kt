@@ -1,5 +1,7 @@
 package com.healthdataet.utdcredentials.ui.screens
 
+import android.content.Intent
+import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +21,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -35,6 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -44,10 +48,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import com.healthdataet.utdcredentials.accessibility.UtdClickAccessibilityService
 import com.healthdataet.utdcredentials.data.ApiClient
 import com.healthdataet.utdcredentials.data.PendingSequentialLogins
 import com.healthdataet.utdcredentials.data.PendingUpToDateLogin
@@ -147,6 +155,28 @@ fun CredentialPickerScreen(
     onOpenHistory: () -> Unit = {}
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    // Round 48p: surfaces the new Accessibility Service fallback (see
+    // UtdClickAccessibilityService's doc comment) so the admin has an
+    // actual in-app way to discover and turn it on -- without this there
+    // was no UI anywhere pointing at it, so it could only ever be enabled
+    // by someone who already knew Android's system Settings path by heart.
+    // Re-checked via the lifecycle observer below every time this screen
+    // comes back to the foreground (e.g. returning from the system
+    // Settings screen after flipping it on), not just once on first entry.
+    var accessibilityEnabled by remember {
+        mutableStateOf(UtdClickAccessibilityService.isEnabledInSystemSettings(context))
+    }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                accessibilityEnabled = UtdClickAccessibilityService.isEnabledInSystemSettings(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     var query by remember { mutableStateOf("") }
     var credentials by remember { mutableStateOf(listOf<CredentialEntry>()) }
     var loading by remember { mutableStateOf(true) }
@@ -294,6 +324,62 @@ fun CredentialPickerScreen(
             }
 
             Spacer(Modifier.height(6.dp))
+
+            // Round 48p: the Accessibility Service status/enable card -- the
+            // final, coordinate-free fallback for the Sign In/Continue click
+            // problem only ever helps once the admin has turned it on once
+            // in system Settings (Android requires this manual step for
+            // every accessibility service; no app can enable it silently).
+            // Shown compactly, and only surfaced with an actionable "Enable"
+            // button when it's actually off, so once it's on this card just
+            // confirms that quietly instead of nagging.
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                colors = if (accessibilityEnabled) {
+                    CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                } else {
+                    CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+                }
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            if (accessibilityEnabled) "Auto-click helper: ON" else "Auto-click helper: OFF",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            if (accessibilityEnabled) {
+                                "Sign In/Continue clicks use the most reliable method available."
+                            } else {
+                                "Recommended: fixes Sign In/Continue not registering a tap."
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    if (!accessibilityEnabled) {
+                        TextButton(
+                            onClick = {
+                                try {
+                                    context.startActivity(
+                                        Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    )
+                                } catch (e: Exception) {
+                                    errorText = "Couldn't open system Accessibility settings on this device."
+                                }
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                        ) { Text("Enable") }
+                    }
+                }
+            }
 
             // Round 48n(c): page-size + page picker, replacing the old
             // "Load next 200" append button -- this is how you actually

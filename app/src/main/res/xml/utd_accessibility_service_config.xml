@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Round 48p: config for UtdClickAccessibilityService -- the final,
+    coordinate-free way to click uptodate.com's Sign In/Continue buttons
+    when tap/key-press don't land.
+
+    android:packageNames restricts this service to ONLY ever see content
+    from this app's own package -- Android will not deliver it any content
+    from any other app, the home screen, or system UI. It is completely
+    inert everywhere else on the phone, and only runs at all once the admin
+    manually enables it in Settings > Accessibility (a one-time, admin-only
+    action Android requires for every accessibility service).
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/utd_accessibility_service_description"
+    android:accessibilityEventTypes="typeAllMask"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:canRetrieveWindowContent="true"
+    android:notificationTimeout="100"
+    android:packageNames="com.healthdataet.utdcredentials" />

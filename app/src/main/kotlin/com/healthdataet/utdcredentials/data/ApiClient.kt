@@ -22,9 +22,19 @@ class ApiResult(val ok: Boolean, val json: JSONObject?, val error: String?)
  * to support native login + push, exactly like the previous build did.
  */
 class ApiClient(private val baseUrl: String) {
+    // Round 48p: bumped 15s -> 30s (connect/read/write) and
+    // retryOnConnectionFailure made explicit -- reported "login test lag
+    // delays" on a weak connection are consistent with these short old
+    // timeouts cutting a slow-but-otherwise-fine request off early and
+    // surfacing it as a network error, rather than any code path actually
+    // hanging. This only raises the ceiling for how long a slow request is
+    // allowed to keep trying; a request that would have succeeded in 5s
+    // before still succeeds in 5s now.
     private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
         .build()
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 

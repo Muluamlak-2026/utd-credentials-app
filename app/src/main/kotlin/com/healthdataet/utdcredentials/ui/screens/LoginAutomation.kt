@@ -15,7 +15,14 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 const val UPTODATE_LOGIN_URL = "https://www.uptodate.com/login"
-const val ATTEMPT_TIMEOUT_MS = 55_000L
+// Round 48p: bumped 55s -> 75s -- on a weak/slow connection the page itself
+// (not just this app's own tap/click retries) can simply take longer to
+// load and settle between steps, and the old 55s ceiling could time out an
+// attempt that was still genuinely in progress, reporting it as a false
+// "timed out" failure. This only affects how long a stuck attempt is
+// allowed to keep trying before giving up -- it does not slow down any
+// attempt that finishes normally.
+const val ATTEMPT_TIMEOUT_MS = 75_000L
 const val INSPECT_INTERVAL_MS = 1200L
 const val SUBMIT_SETTLE_MS = 2500L
 const val TAP_SETTLE_MS = 1800L
@@ -509,7 +516,31 @@ fun startLoginAutomation(
                 } else {
                     consecutiveFinal = 0
                     onStatus(statusLabelFor(result.status))
-                    if (result.status in tapStatuses && result.tapX != null && result.tapY != null) {
+                    // Round 48p: for Sign In/Continue specifically (never
+                    // cookies/popup, which already work fine on every
+                    // attempt) -- if the admin has enabled the
+                    // Accessibility Service fallback, try a real
+                    // ACTION_CLICK on the button's own accessibility node
+                    // FIRST, on every single dispatch (first attempt and
+                    // every retry), before falling back to whatever the JS
+                    // status already asked for (a coordinate tap or a key
+                    // press). See UtdClickAccessibilityService's doc
+                    // comment for why this is the most reliable mechanism
+                    // when it's available, and why it costs nothing to try
+                    // first when it isn't (isActive() is a cheap null
+                    // check, so this is a no-op unless the admin actually
+                    // turned the service on).
+                    val signInLike = result.status == "need_tap_signin" || result.status == "need_key_signin"
+                    val continueLike = result.status == "need_tap_continue" || result.status == "need_key_continue"
+                    val accessibilityHandled = (signInLike || continueLike) &&
+                        com.healthdataet.utdcredentials.accessibility.UtdClickAccessibilityService.isActive() &&
+                        com.healthdataet.utdcredentials.accessibility.UtdClickAccessibilityService.clickButtonByText(
+                            if (signInLike) listOf("sign in", "log in", "submit") else listOf("continue", "next")
+                        )
+
+                    if (accessibilityHandled) {
+                        poll(SUBMIT_SETTLE_MS)
+                    } else if (result.status in tapStatuses && result.tapX != null && result.tapY != null) {
                         nativeTap(view, result.tapX, result.tapY)
                         val nextDelay = if (result.status == "need_tap_continue" || result.status == "need_tap_signin") {
                             SUBMIT_SETTLE_MS

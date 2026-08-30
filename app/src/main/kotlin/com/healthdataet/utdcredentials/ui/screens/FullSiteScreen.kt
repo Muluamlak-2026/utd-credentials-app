@@ -116,6 +116,11 @@ fun FullSiteScreen(
     // far the page load has gotten, not just a generic spinner.
     var isPageLoading by remember { mutableStateOf(true) }
     var loadProgress by remember { mutableStateOf(0f) }
+    // Round 48p: counts consecutive main-frame load failures for the retry
+    // logic below -- reset to 0 the moment a page finishes loading
+    // successfully, so it only ever reflects a CURRENT losing streak, never
+    // a stale count from an earlier, already-recovered blip.
+    var errorRetryCount by remember { mutableStateOf(0) }
 
     // Round 48f: the header (title + notification/refresh/settings/logout
     // icons) is now a slim compact bar instead of Material3's default
@@ -428,6 +433,7 @@ fun FullSiteScreen(
                         override fun onPageFinished(view: WebView, url: String?) {
                             super.onPageFinished(view, url)
                             isPageLoading = false
+                            errorRetryCount = 0
                             canGoBack = view.canGoBack()
                             // Round 32: auto-fill + submit the web login form
                             // every time this screen lands on /admin/login --
@@ -465,6 +471,21 @@ fun FullSiteScreen(
                         // fails to load -- a sub-resource failing (one image,
                         // one script) must never replace real page content,
                         // hence the isForMainFrame check.
+                        //
+                        // Round 48p: on a weak connection a single transient
+                        // hiccup (one dropped packet, a momentary signal
+                        // drop) was enough to immediately replace the whole
+                        // page with this error screen, even though the very
+                        // next attempt a second later would have succeeded
+                        // fine -- this is very likely most of what "apk page
+                        // reloading unstabilities" on weak network describes.
+                        // Now the first two main-frame failures in a row
+                        // auto-retry (a short, increasing delay, so a
+                        // genuinely flaky connection gets more room each
+                        // time) instead of giving up immediately; the static
+                        // error page with its manual Retry link only shows
+                        // once a THIRD consecutive failure confirms this
+                        // isn't just a passing blip.
                         override fun onReceivedError(
                             view: WebView,
                             request: WebResourceRequest,
@@ -473,13 +494,22 @@ fun FullSiteScreen(
                             super.onReceivedError(view, request, error)
                             if (request.isForMainFrame) {
                                 isPageLoading = false
-                                view.loadDataWithBaseURL(
-                                    null,
-                                    connectionErrorHtml(session.baseUrl + "/admin/login", error.description?.toString()),
-                                    "text/html",
-                                    "utf-8",
-                                    null
-                                )
+                                errorRetryCount++
+                                if (errorRetryCount <= 2) {
+                                    val retryUrl = request.url?.toString() ?: (session.baseUrl + "/admin/login")
+                                    view.postDelayed({
+                                        isPageLoading = true
+                                        view.loadUrl(retryUrl)
+                                    }, errorRetryCount * 1500L)
+                                } else {
+                                    view.loadDataWithBaseURL(
+                                        null,
+                                        connectionErrorHtml(session.baseUrl + "/admin/login", error.description?.toString()),
+                                        "text/html",
+                                        "utf-8",
+                                        null
+                                    )
+                                }
                             }
                         }
                     }
