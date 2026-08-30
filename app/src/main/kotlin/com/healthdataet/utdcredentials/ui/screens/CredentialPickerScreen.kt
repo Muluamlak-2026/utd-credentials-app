@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
@@ -104,7 +105,8 @@ fun CredentialPickerScreen(
     session: SessionManager,
     onBack: () -> Unit,
     onCredentialChosen: () -> Unit,
-    onRunSequential: () -> Unit
+    onRunSequential: () -> Unit,
+    onOpenHistory: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -114,8 +116,17 @@ fun CredentialPickerScreen(
     var errorText by remember { mutableStateOf<String?>(null) }
     var revealedIds by remember { mutableStateOf(setOf<Long>()) }
     var selectedIds by remember { mutableStateOf(setOf<Long>()) }
+    // Round 48l: the 200-per-request server cap didn't go away (a truly
+    // unbounded single response would be a real risk on a mobile
+    // connection for a very large pool) -- instead the picker now pages
+    // through it: "offset" tracks which 200-block is currently loaded, and
+    // "totalMatching"/"loadedOffset" (from the server's own `total`/
+    // `offset`) tell it whether a "Load next 200" page actually exists.
+    var offset by remember { mutableStateOf(0) }
+    var totalMatching by remember { mutableStateOf(0) }
+    var lastQuery by remember { mutableStateOf("") }
 
-    fun runSearch(q: String) {
+    fun runSearch(q: String, atOffset: Int = 0, append: Boolean = false) {
         val apiToken = session.apiToken
         if (apiToken == null) {
             errorText = "Not logged in."
@@ -124,19 +135,22 @@ fun CredentialPickerScreen(
         }
         loading = true
         errorText = null
+        lastQuery = q
         scope.launch {
             val result = withContext(Dispatchers.IO) {
-                ApiClient(session.baseUrl).listCredentials(apiToken, q)
+                ApiClient(session.baseUrl).listCredentials(apiToken, q, atOffset)
             }
             loading = false
             if (result.ok && result.json != null) {
                 val fetched = parseCredentials(result.json)
-                credentials = fetched
-                // Drop any selection that no longer matches the current
-                // search results, so "Run Sequential Login (N)" never
+                credentials = if (append) credentials + fetched else fetched
+                totalMatching = result.json.optInt("total", fetched.size)
+                offset = atOffset
+                // Drop any selection that no longer matches what's
+                // currently loaded, so "Run Sequential Login (N)" never
                 // silently refers to rows the admin can't currently see.
-                val fetchedIds = fetched.map { it.id }.toSet()
-                selectedIds = selectedIds.filter { it in fetchedIds }.toSet()
+                val loadedIds = credentials.map { it.id }.toSet()
+                selectedIds = selectedIds.filter { it in loadedIds }.toSet()
             } else {
                 errorText = result.error ?: "Could not load credentials."
             }
@@ -144,6 +158,7 @@ fun CredentialPickerScreen(
     }
 
     LaunchedEffect(Unit) { runSearch("") }
+    val hasMore = credentials.size < totalMatching
 
     val loginableCount = credentials.count {
         it.id in selectedIds && !it.username.isNullOrBlank() && !it.password.isNullOrBlank()
@@ -156,6 +171,11 @@ fun CredentialPickerScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onOpenHistory) {
+                        Icon(Icons.Filled.History, contentDescription = "Login history")
                     }
                 }
             )
@@ -231,7 +251,7 @@ fun CredentialPickerScreen(
                     modifier = Modifier.weight(1f)
                 )
                 Spacer(Modifier.width(8.dp))
-                Button(onClick = { runSearch(query) }) { Text("Search") }
+                Button(onClick = { runSearch(query, atOffset = 0, append = false) }) { Text("Search") }
             }
 
             Spacer(Modifier.height(8.dp))
@@ -243,8 +263,14 @@ fun CredentialPickerScreen(
                             .filter { !it.username.isNullOrBlank() && !it.password.isNullOrBlank() }
                             .map { it.id }
                             .toSet()
-                    }) { Text("Select All") }
+                    }) { Text("Select All Loaded") }
                     TextButton(onClick = { selectedIds = emptySet() }) { Text("Select None") }
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        "${credentials.size} of $totalMatching loaded",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
 
@@ -338,6 +364,24 @@ fun CredentialPickerScreen(
                             }
                         }
                         HorizontalDivider()
+                    }
+                    if (hasMore) {
+                        item {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                if (loading) {
+                                    CircularProgressIndicator(modifier = Modifier.height(24.dp))
+                                } else {
+                                    Button(onClick = {
+                                        runSearch(lastQuery, atOffset = offset + 200, append = true)
+                                    }) {
+                                        Text("Load next 200 (${totalMatching - credentials.size} remaining)")
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

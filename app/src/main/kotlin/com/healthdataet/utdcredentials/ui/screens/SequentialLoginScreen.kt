@@ -35,6 +35,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.healthdataet.utdcredentials.data.PendingSequentialLogins
@@ -147,7 +148,7 @@ private fun LoginAttemptRunner(
 }
 
 @Composable
-private fun ResultRow(result: LoginAttemptResult) {
+private fun ResultRow(result: LoginAttemptResult, compact: Boolean = false) {
     val label: String
     val color: androidx.compose.ui.graphics.Color
     when (val outcome = result.outcome) {
@@ -168,20 +169,22 @@ private fun ResultRow(result: LoginAttemptResult) {
             color = MaterialTheme.colorScheme.onSurfaceVariant
         }
     }
-    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        Column(modifier = Modifier.padding(12.dp)) {
+    Card(modifier = Modifier.fillMaxWidth().padding(vertical = if (compact) 2.dp else 4.dp)) {
+        Column(modifier = Modifier.padding(if (compact) 6.dp else 12.dp)) {
             Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
                 Text(
                     result.credential.ucCode ?: result.credential.username ?: "(unknown)",
-                    style = MaterialTheme.typography.titleSmall
+                    style = if (compact) MaterialTheme.typography.labelMedium else MaterialTheme.typography.titleSmall
                 )
-                Text(label, style = MaterialTheme.typography.labelMedium, color = color)
+                Text(label, style = MaterialTheme.typography.labelSmall, color = color)
             }
-            Text(
-                "Username: ${result.credential.username ?: "-"}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            if (!compact) {
+                Text(
+                    "Username: ${result.credential.username ?: "-"}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
@@ -212,6 +215,7 @@ private fun ResultRow(result: LoginAttemptResult) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SequentialLoginScreen(session: SessionManager, onBack: () -> Unit) {
+    val appContext = LocalContext.current.applicationContext
     val queue = remember { PendingSequentialLogins.consume().orEmpty() }
     var results by remember { mutableStateOf(listOf<LoginAttemptResult>()) }
     var currentIndex by remember { mutableStateOf(0) }
@@ -250,39 +254,40 @@ fun SequentialLoginScreen(session: SessionManager, onBack: () -> Unit) {
                     style = MaterialTheme.typography.bodyMedium
                 )
             } else {
-                Column(modifier = Modifier.padding(16.dp)) {
+                // Round 48l: this header used to be 16dp-padded titleSmall
+                // + bodySmall (two full lines of chrome eating into the
+                // WebView below) -- shrunk to one compact line so "the
+                // actual working screen will be enough".
+                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
                     if (finished) {
                         Text(
                             "Finished: $successCount succeeded, $failCount failed, " +
                                 "${results.size - successCount - failCount} skipped, " +
                                 "out of ${results.size} attempted",
-                            style = MaterialTheme.typography.titleSmall
+                            style = MaterialTheme.typography.labelMedium
                         )
                         if (stopRequested && currentIndex < queue.size) {
                             Text(
                                 "Stopped early -- ${queue.size - currentIndex} credential(s) were not attempted.",
-                                style = MaterialTheme.typography.bodySmall,
+                                style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     } else {
                         val currentCred = queue[currentIndex]
                         Text(
-                            "Attempt ${currentIndex + 1} of ${queue.size}: " +
-                                (currentCred.ucCode ?: currentCred.username ?: "credential"),
-                            style = MaterialTheme.typography.titleSmall
-                        )
-                        Text(
-                            statusText,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            "Attempt ${currentIndex + 1}/${queue.size}: " +
+                                (currentCred.ucCode ?: currentCred.username ?: "credential") +
+                                " -- $statusText",
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1
                         )
                     }
                 }
                 HorizontalDivider()
 
                 if (!finished) {
-                    Box(modifier = Modifier.weight(0.6f).fillMaxWidth()) {
+                    Box(modifier = Modifier.weight(0.7f).fillMaxWidth()) {
                         key(currentIndex) {
                             LoginAttemptRunner(
                                 credential = queue[currentIndex],
@@ -290,7 +295,10 @@ fun SequentialLoginScreen(session: SessionManager, onBack: () -> Unit) {
                                 onDone = { outcome ->
                                     val cred = queue[currentIndex]
                                     results = results + LoginAttemptResult(cred, outcome)
-                                    reportLoginOutcome(scope, session, Pair(cred.source, cred.id), outcome)
+                                    reportLoginOutcome(
+                                        scope, session, Pair(cred.source, cred.id), outcome,
+                                        context = appContext, ucCode = cred.ucCode, username = cred.username
+                                    )
                                     currentIndex += 1
                                 }
                             )
@@ -300,11 +308,11 @@ fun SequentialLoginScreen(session: SessionManager, onBack: () -> Unit) {
 
                 LazyColumn(
                     modifier = Modifier
-                        .weight(if (finished) 1f else 0.4f)
+                        .weight(if (finished) 1f else 0.3f)
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp)
+                        .padding(horizontal = 12.dp)
                 ) {
-                    items(results.reversed()) { r -> ResultRow(r) }
+                    items(results.reversed()) { r -> ResultRow(r, compact = !finished) }
                 }
             }
         }

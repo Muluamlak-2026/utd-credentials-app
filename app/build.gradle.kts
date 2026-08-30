@@ -272,8 +272,23 @@ android {
         // timed-out with the reason, skipped, incomplete-credentials, or
         // untested/not-tried-yet. Fire-and-forget: any problem reporting
         // this never affects the login flow itself.
-        versionCode = 23
-        versionName = "1.4.17"
+        // Round 48l: (1) native tap now holds down ~70ms with a 1px move
+        // before lifting (was instant down+up at the same timestamp) --
+        // real finger taps always have a brief hold + tiny movement, which
+        // is apparently what uptodate.com's Sign In/Continue handlers key
+        // off of; no extra Android permission is or was ever needed for
+        // this (dispatchTouchEvent is a plain View API on the app's own
+        // WebView, not a system-wide input capability). (2) UI chrome
+        // (status banner, progress bar, sequential-run header/result list)
+        // shrunk so the WebView gets more of the screen. (3) New on-device
+        // Login History screen (History icon on the credential picker) --
+        // ordered/success/fail tallies + per-credential expandable attempt
+        // lists, purely local (LoginHistoryStore), separate from the
+        // website's Sign-In Test column. (4) Credential picker now pages
+        // through the pool 200-at-a-time ("Load next 200") instead of
+        // always hard-capping at the first 200.
+        versionCode = 24
+        versionName = "1.4.18"
         buildConfigField("String", "GIT_SHA", "\"${gitShaForBuild()}\"")
     }
 

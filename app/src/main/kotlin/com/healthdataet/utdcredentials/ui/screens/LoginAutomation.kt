@@ -1,9 +1,11 @@
 package com.healthdataet.utdcredentials.ui.screens
 
+import android.content.Context
 import android.os.SystemClock
 import android.view.MotionEvent
 import android.webkit.WebView
 import com.healthdataet.utdcredentials.data.ApiClient
+import com.healthdataet.utdcredentials.data.LoginHistoryStore
 import com.healthdataet.utdcredentials.data.SessionManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -321,27 +323,54 @@ fun statusLabelFor(status: String): String = when (status) {
 }
 
 /**
- * Dispatches a real, OS-level touch tap (ACTION_DOWN then ACTION_UP) at the
- * given page coordinates (CSS px, from getBoundingClientRect) on the given
- * WebView. Unlike anything a JS-injected script can produce, this event is
- * indistinguishable from an actual finger tap -- necessary because this
+ * Dispatches a real, OS-level touch tap (ACTION_DOWN, then a same-spot
+ * ACTION_MOVE, then ACTION_UP after a short real hold) at the given page
+ * coordinates (CSS px, from getBoundingClientRect) on the given WebView.
+ * Unlike anything a JS-injected script can produce, this event is meant to
+ * be indistinguishable from an actual finger tap -- necessary because this
  * page's real buttons ignore a synthetic .click() and even a full JS
  * pointerdown/mousedown/mouseup/click event sequence. WebView.getScale()
  * converts CSS px into the WebView's own local view-pixel coordinate space
  * (accounting for the page's current zoom level).
+ *
+ * Round 48l: earlier rounds dispatched ACTION_DOWN immediately followed by
+ * ACTION_UP at the exact same instant (both timestamped "now") -- a real
+ * finger tap always has a brief hold (tens of milliseconds) and virtually
+ * always a tiny bit of finger movement in between, which is what many
+ * touch/click handlers (including, apparently, this page's) key off of
+ * rather than the coordinates alone. This version holds the touch down for
+ * ~70ms and inserts an ACTION_MOVE of 1px before lifting, so the event
+ * sequence looks like a real tap rather than an instantaneous synthetic
+ * one. No Android permission is involved anywhere in this: dispatchTouchEvent
+ * is a plain View API the app calls on its OWN WebView instance in its own
+ * process -- functionally identical to how the WebView already receives
+ * every real finger tap the admin makes on screen elsewhere in the app, not
+ * a system-wide input-injection capability, so nothing extra needed to be
+ * (or could have been) requested at install time.
  */
 fun nativeTap(view: WebView, cssX: Double, cssY: Double) {
     val scale = if (view.scale > 0f) view.scale else 1f
     val x = (cssX * scale).toFloat()
     val y = (cssY * scale).toFloat()
     val downTime = SystemClock.uptimeMillis()
+
     val downEvent = MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, x, y, 0)
     view.dispatchTouchEvent(downEvent)
     downEvent.recycle()
-    val upTime = SystemClock.uptimeMillis()
-    val upEvent = MotionEvent.obtain(downTime, upTime, MotionEvent.ACTION_UP, x, y, 0)
-    view.dispatchTouchEvent(upEvent)
-    upEvent.recycle()
+
+    view.postDelayed({
+        val moveTime = SystemClock.uptimeMillis()
+        val moveEvent = MotionEvent.obtain(downTime, moveTime, MotionEvent.ACTION_MOVE, x + 1f, y + 1f, 0)
+        view.dispatchTouchEvent(moveEvent)
+        moveEvent.recycle()
+
+        view.postDelayed({
+            val upTime = SystemClock.uptimeMillis()
+            val upEvent = MotionEvent.obtain(downTime, upTime, MotionEvent.ACTION_UP, x + 1f, y + 1f, 0)
+            view.dispatchTouchEvent(upEvent)
+            upEvent.recycle()
+        }, 40L)
+    }, 30L)
 }
 
 /**
@@ -355,21 +384,41 @@ fun nativeTap(view: WebView, cssX: Double, cssY: Double) {
  * to key the result against). Never surfaces a failure back to the caller:
  * a network hiccup here must never affect the login flow itself, only the
  * Hub's visibility into it.
+ *
+ * Round 48l: also appends to the on-device LoginHistoryStore (a purely
+ * local log, separate from the website's per-credential Sign-In Test
+ * column) so the new in-app History screen has something to show --
+ * ucCode/username let the History list read out identities without another
+ * network round-trip. [context] can be omitted by call sites that don't
+ * have one handy, in which case only the server-side report happens.
  */
 fun reportLoginOutcome(
     scope: CoroutineScope,
     session: SessionManager,
     sourceId: Pair<String, Long>?,
-    outcome: LoginAttemptOutcome
+    outcome: LoginAttemptOutcome,
+    context: Context? = null,
+    ucCode: String? = null,
+    username: String? = null
 ) {
-    val token = session.apiToken ?: return
-    val (source, id) = sourceId ?: return
     val (status, reason) = when (outcome) {
         is LoginAttemptOutcome.Success -> "success" to null
         is LoginAttemptOutcome.Failed -> "failed" to outcome.reason
         is LoginAttemptOutcome.TimedOut -> "timeout" to "No clear result within the attempt timeout"
         is LoginAttemptOutcome.Skipped -> "skipped" to null
     }
+
+    if (context != null && sourceId != null) {
+        val (source, id) = sourceId
+        try {
+            LoginHistoryStore.record(context, source, id, ucCode, username, status, reason)
+        } catch (e: Exception) {
+            // Local logging only -- never let this affect the login flow.
+        }
+    }
+
+    val token = session.apiToken ?: return
+    val (source, id) = sourceId ?: return
     scope.launch {
         withContext(Dispatchers.IO) {
             try {

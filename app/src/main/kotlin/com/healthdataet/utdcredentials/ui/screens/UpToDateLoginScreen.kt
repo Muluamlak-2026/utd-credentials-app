@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -32,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.healthdataet.utdcredentials.data.PendingUpToDateLogin
@@ -66,6 +68,7 @@ import kotlinx.coroutines.delay
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun UpToDateLoginScreen(session: SessionManager, onBack: () -> Unit) {
+    val appContext = LocalContext.current.applicationContext
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var canGoBack by remember { mutableStateOf(false) }
     var isPageLoading by remember { mutableStateOf(true) }
@@ -92,7 +95,7 @@ fun UpToDateLoginScreen(session: SessionManager, onBack: () -> Unit) {
         if (!resolved) {
             resolved = true
             outcome = result
-            reportLoginOutcome(scope, session, sourceId, result)
+            reportLoginOutcome(scope, session, sourceId, result, context = appContext, username = username)
         }
     }
 
@@ -141,25 +144,34 @@ fun UpToDateLoginScreen(session: SessionManager, onBack: () -> Unit) {
                     is LoginAttemptOutcome.Skipped -> "This credential has no username/password on file" to true
                     null -> "This credential has no username/password on file" to true
                 }
+                // Round 48l: shrunk from bodyMedium/12dp padding to a
+                // single compact line -- "fit the page content to the
+                // working screen... resize the sign in progress bar" --
+                // this banner and the progress bar below it are the two
+                // fixed-height bits of chrome eating into the WebView's
+                // usable area, so both are trimmed as small as still
+                // legible.
                 Surface(
                     color = if (isError) MaterialTheme.colorScheme.errorContainer
                     else MaterialTheme.colorScheme.primaryContainer
                 ) {
                     Text(
                         label,
-                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
                         color = if (isError) MaterialTheme.colorScheme.onErrorContainer
                         else MaterialTheme.colorScheme.onPrimaryContainer,
-                        style = MaterialTheme.typography.bodyMedium
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 2
                     )
                 }
             } else {
                 Surface(tonalElevation = 2.dp) {
                     Text(
                         statusText,
-                        modifier = Modifier.fillMaxWidth().padding(12.dp),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
                     )
                 }
             }
@@ -232,7 +244,10 @@ fun UpToDateLoginScreen(session: SessionManager, onBack: () -> Unit) {
                 if (isPageLoading) {
                     // Box's default child alignment is top-start, so a
                     // plain fillMaxWidth() bar here pins to the top edge.
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    // Round 48l: pinned to a thin 2dp strip instead of the
+                    // default (~4dp) height -- still visible, barely any
+                    // WebView area lost to it.
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(2.dp))
                 }
             }
         }

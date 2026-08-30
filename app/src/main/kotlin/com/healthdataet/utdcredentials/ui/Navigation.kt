@@ -21,6 +21,7 @@ import com.healthdataet.utdcredentials.ui.screens.CrashLogScreen
 import com.healthdataet.utdcredentials.ui.screens.CredentialPickerScreen
 import com.healthdataet.utdcredentials.ui.screens.FullSiteScreen
 import com.healthdataet.utdcredentials.ui.screens.LockScreen
+import com.healthdataet.utdcredentials.ui.screens.LoginHistoryScreen
 import com.healthdataet.utdcredentials.ui.screens.LoginScreen
 import com.healthdataet.utdcredentials.ui.screens.SecuritySettingsScreen
 import com.healthdataet.utdcredentials.ui.screens.SequentialLoginScreen
@@ -42,6 +43,10 @@ private const val ROUTE_DIAGNOSTICS = "diagnostics"
 private const val ROUTE_CREDENTIAL_PICKER = "credential_picker"
 private const val ROUTE_UPTODATE_LOGIN = "uptodate_login"
 private const val ROUTE_SEQUENTIAL_LOGIN = "sequential_login"
+// Round 48l: on-device log of every automated login attempt this app has
+// ever made (separate from the website Hub's per-credential Sign-In Test
+// column) -- reached via a History icon on the credential picker's top bar.
+private const val ROUTE_LOGIN_HISTORY = "login_history"
 
 /** Round 47b: how long the app stays unlocked after being backgrounded
  * (switched to another app, or minimized) before the lock gate re-arms.
@@ -170,7 +175,8 @@ fun AppNavHost() {
                 session = session,
                 onBack = { navController.popBackStack() },
                 onCredentialChosen = { navController.navigate(ROUTE_UPTODATE_LOGIN) },
-                onRunSequential = { navController.navigate(ROUTE_SEQUENTIAL_LOGIN) }
+                onRunSequential = { navController.navigate(ROUTE_SEQUENTIAL_LOGIN) },
+                onOpenHistory = { navController.navigate(ROUTE_LOGIN_HISTORY) }
             )
         }
         composable(ROUTE_UPTODATE_LOGIN) {
@@ -178,6 +184,9 @@ fun AppNavHost() {
         }
         composable(ROUTE_SEQUENTIAL_LOGIN) {
             SequentialLoginScreen(session = session, onBack = { navController.popBackStack() })
+        }
+        composable(ROUTE_LOGIN_HISTORY) {
+            LoginHistoryScreen(onBack = { navController.popBackStack() })
         }
     }
 }
