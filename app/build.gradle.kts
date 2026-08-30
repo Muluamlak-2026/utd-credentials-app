@@ -294,8 +294,22 @@ android {
         // ArrowBack/Refresh/etc used elsewhere actually needed). Replaced
         // all four with plain text glyphs/labels instead of adding that
         // dependency.
-        versionCode = 25
-        versionName = "1.4.19"
+        // Round 48n: (1a) removed the intro paragraph on the UpToDate Quick
+        // Login picker -- admin-only screen, self-explanatory. (1b) search
+        // field shrunk to a genuine single line (the long label used to
+        // wrap 2-3 lines). (1c) replaced "Load next 200" with a real
+        // page-size (100/200) + page-number picker -- selections now
+        // persist across pages. (1d) each credential card shows its own
+        // last Sign-In Test result, synced from the same data the web
+        // Hub's column reads. (1e) footer/results kept clear of the
+        // phone's gesture nav bar (navigationBarsPadding), buttons/text
+        // resized down to fit comfortably above it. (2) Sign In/Continue's
+        // SECOND retry attempt now uses a completely different mechanism
+        // -- focus the button, then a real ENTER key event -- instead of
+        // repeating the same coordinate tap a third time; a THIRD attempt
+        // (if still stuck) taps again, offset a few px from dead-center.
+        versionCode = 26
+        versionName = "1.4.20"
         buildConfigField("String", "GIT_SHA", "\"${gitShaForBuild()}\"")
     }
 

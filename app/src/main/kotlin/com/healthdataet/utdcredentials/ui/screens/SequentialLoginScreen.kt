@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -246,7 +247,9 @@ fun SequentialLoginScreen(session: SessionManager, onBack: () -> Unit) {
             )
         }
     ) { padding ->
-        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+        // Round 48n(e): navigationBarsPadding() keeps the result list/footer
+        // clear of the phone's gesture nav bar instead of being clipped by it.
+        Column(modifier = Modifier.fillMaxSize().padding(padding).navigationBarsPadding()) {
             if (queue.isEmpty()) {
                 Text(
                     "No credentials were selected -- go back and check at least one.",

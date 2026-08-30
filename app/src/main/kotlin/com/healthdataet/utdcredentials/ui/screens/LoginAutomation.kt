@@ -2,6 +2,7 @@ package com.healthdataet.utdcredentials.ui.screens
 
 import android.content.Context
 import android.os.SystemClock
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.webkit.WebView
 import com.healthdataet.utdcredentials.data.ApiClient
@@ -136,18 +137,28 @@ fun inspectAndActScript(username: String, password: String): String {
                 // The password field is on screen -- this is the final
                 // step, whether or not a username field is showing
                 // alongside it on the same page.
-                var maxSignInAttempts = 2;
+                var maxSignInAttempts = 3;
                 var signInAttempts = window.__utdSignInAttempts || 0;
                 if (window.__utdSignInTapRequested) {
                     // A tap was already sent. Verify it actually had an
                     // effect before deciding what to do next: if Sign In
                     // is no longer findable, the page is most likely
                     // already navigating -- just wait for the result. If
-                    // it's STILL sitting right there, the previous tap
+                    // it's STILL sitting right there, the previous attempt
                     // most likely never registered -- retry, up to
                     // maxSignInAttempts total, rather than silently waiting
                     // out the whole attempt timeout on a tap that never
                     // landed.
+                    //
+                    // Round 48n: the retries no longer just repeat the same
+                    // coordinate tap -- attempt 2 switches to a completely
+                    // different, coordinate-free mechanism (focus the
+                    // button, then Android sends a real ENTER key event),
+                    // since a repeated identical tap is unlikely to succeed
+                    // where the first one already failed. Attempt 3 falls
+                    // back to a tap again, offset a few px from dead-center
+                    // in case an overlapping element (a hover/focus ring,
+                    // a sticky header) was intercepting the exact center.
                     var stillThere = findButtonByText(['sign in', 'log in', 'submit']);
                     if (!stillThere || signInAttempts >= maxSignInAttempts) {
                         return JSON.stringify({status: 'waiting_password_result', url: window.location.href});
@@ -156,8 +167,12 @@ fun inspectAndActScript(username: String, password: String): String {
                         return JSON.stringify({status: 'settling_before_signin', url: window.location.href});
                     }
                     window.__utdSignInAttempts = signInAttempts + 1;
+                    if (signInAttempts === 1) {
+                        stillThere.focus();
+                        return JSON.stringify({status: 'need_key_signin', url: window.location.href});
+                    }
                     var retryC = centerOf(stillThere);
-                    return JSON.stringify({status: 'need_tap_signin', url: window.location.href, x: retryC.x, y: retryC.y});
+                    return JSON.stringify({status: 'need_tap_signin', url: window.location.href, x: retryC.x + 6, y: retryC.y + 6});
                 }
                 var userReady = !userField || !!userField.value;
                 if (userField && !userField.value) {
@@ -209,14 +224,16 @@ fun inspectAndActScript(username: String, password: String): String {
             }
 
             if (userField && userField.value === "$escapedUser") {
-                var maxContinueAttempts = 2;
+                var maxContinueAttempts = 3;
                 var continueAttempts = window.__utdContinueAttempts || 0;
                 if (window.__utdContinueTapRequested) {
                     // Same verify-then-retry pattern as Sign In above: if
                     // Continue is no longer findable, the page is likely
                     // already moving on -- wait. If it's still right
-                    // there, the previous tap probably missed -- retry, up
-                    // to maxContinueAttempts.
+                    // there, the previous attempt probably missed -- retry,
+                    // switching mechanism on attempt 2 (focus + native
+                    // ENTER key instead of another coordinate tap), up to
+                    // maxContinueAttempts.
                     var continueStillThere = findButtonByText(['continue', 'next']);
                     if (!continueStillThere || continueAttempts >= maxContinueAttempts) {
                         return JSON.stringify({status: 'waiting_username_result', url: window.location.href});
@@ -225,8 +242,12 @@ fun inspectAndActScript(username: String, password: String): String {
                         return JSON.stringify({status: 'settling_before_continue', url: window.location.href});
                     }
                     window.__utdContinueAttempts = continueAttempts + 1;
+                    if (continueAttempts === 1) {
+                        continueStillThere.focus();
+                        return JSON.stringify({status: 'need_key_continue', url: window.location.href});
+                    }
                     var retryC4 = centerOf(continueStillThere);
-                    return JSON.stringify({status: 'need_tap_continue', url: window.location.href, x: retryC4.x, y: retryC4.y});
+                    return JSON.stringify({status: 'need_tap_continue', url: window.location.href, x: retryC4.x + 6, y: retryC4.y + 6});
                 }
                 // First time reaching this step: blur whatever's focused
                 // (closes the keyboard the .focus() fill just opened) and
@@ -319,6 +340,8 @@ fun statusLabelFor(status: String): String = when (status) {
     "filling_password_step" -> "Filling in the password step..."
     "settling_before_continue" -> "Closing the keyboard before tapping Continue..."
     "settling_before_signin" -> "Closing the keyboard before tapping Sign In..."
+    "need_key_continue" -> "Continue didn't respond to a tap -- trying a keyboard Enter instead..."
+    "need_key_signin" -> "Sign In didn't respond to a tap -- trying a keyboard Enter instead..."
     else -> "Working through login steps..."
 }
 
@@ -371,6 +394,29 @@ fun nativeTap(view: WebView, cssX: Double, cssY: Double) {
             upEvent.recycle()
         }, 40L)
     }, 30L)
+}
+
+/**
+ * Round 48n: the second Sign In/Continue retry attempt (see
+ * inspectAndActScript's verify-then-retry blocks) uses this instead of
+ * another coordinate tap -- a completely different, coordinate-free
+ * mechanism for the exact same problem (this page's Sign In/Continue not
+ * reacting to anything JS alone can produce). The JS side first calls
+ * `.focus()` on the button so it's the actual DOM-focused element, then
+ * Android dispatches a real hardware-style ENTER key event (ACTION_DOWN +
+ * ACTION_UP for KEYCODE_ENTER) straight at the WebView. Browsers (including
+ * WebView's underlying engine) treat Enter/Space on a focused button as a
+ * genuine, trusted activation -- generated by the engine itself, not by
+ * JS -- exactly like a real keyboard would, so this sidesteps the whole
+ * on-screen-coordinate/scale question entirely: it doesn't matter where the
+ * button visually is, only that it's focused.
+ */
+fun nativeEnterKeyPress(view: WebView) {
+    val eventTime = SystemClock.uptimeMillis()
+    val downEvent = KeyEvent(eventTime, eventTime, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER, 0)
+    view.dispatchKeyEvent(downEvent)
+    val upEvent = KeyEvent(eventTime, SystemClock.uptimeMillis(), KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER, 0)
+    view.dispatchKeyEvent(upEvent)
 }
 
 /**
@@ -442,6 +488,10 @@ fun startLoginAutomation(
     val finalConfirmationsNeeded = 2
     var consecutiveFinal = 0
     val tapStatuses = setOf("need_tap_cookies", "need_tap_popup", "need_tap_continue", "need_tap_signin")
+    // Round 48n: the coordinate-free fallback -- see nativeEnterKeyPress's
+    // own doc comment for why a focus+ENTER key event is a genuinely
+    // different mechanism from a tap, not just a repeat of the same one.
+    val keyStatuses = setOf("need_key_continue", "need_key_signin")
 
     fun poll(delayMs: Long) {
         view.postDelayed({
@@ -467,6 +517,9 @@ fun startLoginAutomation(
                             TAP_SETTLE_MS
                         }
                         poll(nextDelay)
+                    } else if (result.status in keyStatuses) {
+                        nativeEnterKeyPress(view)
+                        poll(SUBMIT_SETTLE_MS)
                     } else {
                         val nextDelay = when (result.status) {
                             "submitted_username" -> SUBMIT_SETTLE_MS

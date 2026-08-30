@@ -97,12 +97,13 @@ class ApiClient(private val baseUrl: String) {
      * already shows, searchable so a long pool never has to be scrolled
      * through blind. [query] blank means "everything" (capped server-side
      * at 200 rows). */
-    fun listCredentials(token: String, query: String, offset: Int = 0): ApiResult {
+    fun listCredentials(token: String, query: String, offset: Int = 0, limit: Int = 200): ApiResult {
         val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
-        // Round 48l: pages through the full pool 200-at-a-time (offset) instead
-        // of always silently truncating to the first 200 -- see
+        // Round 48n: real paging -- offset/limit together select an exact
+        // page (100 or 200 per page, picked in the UI) rather than always
+        // widening a single accumulated list. See
         // list_credentials_for_login's own doc comment for the server side.
-        return getWithAuth("/api/v1/credentials/list?q=$encodedQuery&offset=$offset&limit=200", token)
+        return getWithAuth("/api/v1/credentials/list?q=$encodedQuery&offset=$offset&limit=$limit", token)
     }
 
     /** Round 48k: reports the result of one automated UpToDate sign-in
