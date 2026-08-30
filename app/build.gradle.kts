@@ -217,8 +217,24 @@ android {
         // once" guard now only latches when a button was actually found
         // and clicked, so a poll where nothing was clickable yet retries
         // instead of waiting out the whole timeout in silence.
-        versionCode = 20
-        versionName = "1.4.14"
+        // Round 48i hotfix 8: hotfix 7's synthetic pointer/mouse gesture
+        // STILL didn't trigger Sign In (confirmed live: fields fill, then
+        // 25s of "waiting for the page to respond", then a full-page
+        // navigation/loading spinner appears with no final success). Real
+        // root cause: this button's handler apparently requires a
+        // genuinely trusted touch event -- something no amount of
+        // JS-dispatched pointerdown/mousedown/mouseup/click can ever
+        // produce, since JS-dispatched events are always untrusted.
+        // Switched approach entirely: the script no longer tries to click
+        // anything in JS at all. It finds the target button (Accept
+        // Cookies / Ask Again Tomorrow / Continue / Sign In) and reports
+        // its on-screen coordinates back to Kotlin, which then dispatches
+        // a REAL native Android touch (MotionEvent ACTION_DOWN + ACTION_UP)
+        // directly at the WebView via view.dispatchTouchEvent() -- this is
+        // indistinguishable from an actual finger tap and can't be
+        // filtered out the way a synthetic JS event can.
+        versionCode = 21
+        versionName = "1.4.15"
         buildConfigField("String", "GIT_SHA", "\"${gitShaForBuild()}\"")
     }
 
