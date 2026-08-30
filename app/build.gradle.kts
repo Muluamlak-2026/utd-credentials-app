@@ -5,9 +5,37 @@ plugins {
     id("com.google.gms.google-services")
 }
 
+// Round 48e: a real, on-device way to prove which commit is actually
+// installed. Every round from 43 through 48-final shipped real code
+// changes without ever bumping versionCode/versionName (still "8"/"1.4.2"
+// since Round 42) -- meaning Settings -> Apps -> UTD Credentials -> version
+// could never distinguish an old install from a new one, and a debug-
+// keystore install replaces the app silently with no "Update" prompt on
+// this device either. Combined, there was no way to confirm from the phone
+// alone whether a just-installed APK actually contains the intended
+// commit. gitShaForBuild() below reads the real commit Gradle is building
+// from (works both in Termux's local clone and in the GitHub Actions
+// runner's checkout) and bakes it into BuildConfig, shown on-screen by
+// AppSettingsScreen -- see that file for where.
+fun gitShaForBuild(): String = try {
+    val process = ProcessBuilder("git", "rev-parse", "--short", "HEAD")
+        .redirectErrorStream(true)
+        .start()
+    val output = process.inputStream.bufferedReader().readText().trim()
+    process.waitFor()
+    output.ifEmpty { "unknown" }
+} catch (e: Exception) {
+    "unknown"
+}
+
 android {
     namespace = "com.healthdataet.utdcredentials"
     compileSdk = 34
+
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
 
     defaultConfig {
         applicationId = "com.healthdataet.utdcredentials"
@@ -91,11 +119,64 @@ android {
         // the in-app bell badge now shares one real counter across FCM/poll/
         // WorkManager instead of three disconnected pieces of state (see
         // data/SessionManager.kt / push/NotificationChannels.kt).
-        versionCode = 8
-        versionName = "1.4.2"
+        // Round 48e: bumped again purely so this build is distinguishable
+        // on-device (Settings -> Apps -> UTD Credentials -> version, and
+        // the new Build line on App Settings -- see AppSettingsScreen.kt)
+        // from every prior round since 42 that never bumped this. Also
+        // bakes in the actual git commit being built (see gitShaForBuild()
+        // above) as the definitive answer to "is this really the new code."
+        versionCode = 9
+        versionName = "1.4.3"
+        buildConfigField("String", "GIT_SHA", "\"${gitShaForBuild()}\"")
+    }
+
+    // Round 48e: THE likely real root cause of "every fix builds fine and
+    // 'installs' but nothing ever actually changes on the phone." No
+    // signingConfig existed anywhere in this project and no debug.keystore
+    // was ever committed to the repo -- which meant every single build was
+    // signed with the Android Gradle Plugin's DEFAULT debug keystore,
+    // auto-generated on demand at ~/.android/debug.keystore. That's fine
+    // for one machine used repeatedly, but GitHub Actions' ubuntu-latest
+    // runners are thrown away after every run with no persisted home
+    // directory -- so EVERY workflow run auto-generated a BRAND NEW random
+    // debug key, meaning every app-debug.apk this project has ever produced
+    // via GitHub Actions was signed differently from the one before it.
+    // Android refuses to install an app over an existing install of the
+    // SAME package name signed with a DIFFERENT key -- it fails outright
+    // ("App not installed") rather than updating, and critically, that
+    // failure can be very easy to miss in Termux's `termux-open` flow,
+    // which just hands off to the system installer and doesn't itself
+    // report success/failure back to the terminal. The result: every round
+    // since whichever one first drifted to a new random key could have
+    // silently failed to install, leaving whatever old build was already
+    // on the phone completely untouched -- which matches "nothing ever
+    // changes" exactly.
+    //
+    // Fixed by committing app/debug.keystore to the repo (standard Android
+    // debug alias/passwords, harmless to check in -- this is exactly what
+    // the stock ~/.android/debug.keystore already is, just persisted) and
+    // pointing the debug build at it explicitly, so every future build --
+    // Termux-local or GitHub Actions -- signs with this SAME key forever.
+    //
+    // ONE-TIME MANUAL STEP STILL REQUIRED: this only fixes builds from now
+    // on. Whatever is currently installed on the phone was very likely
+    // signed with one of the old random keys, so the very next install
+    // attempt of a build using THIS keystore will also fail as a signature
+    // mismatch unless the old app is uninstalled first. See this round's
+    // deploy notes.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = false
         }
@@ -108,10 +189,6 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
-    }
-
-    buildFeatures {
-        compose = true
     }
 }
 

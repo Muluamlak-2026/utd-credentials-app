@@ -35,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.healthdataet.utdcredentials.BuildConfig
 import com.healthdataet.utdcredentials.data.AppearancePrefs
 
 /**
@@ -148,6 +149,22 @@ fun AppSettingsScreen(
                     "wrong on a niche admin app, so they're left to your phone's own " +
                     "Settings and Home screen instead.",
                 style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(Modifier.height(24.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(12.dp))
+            // Round 48e: the definitive on-device answer to "is this
+            // actually the new build" -- versionName/versionCode alone went
+            // unbumped for 6 rounds straight (see build.gradle.kts), and a
+            // debug-keystore install can replace the app silently with no
+            // visible "Update" prompt. This line, plus the git commit it
+            // was actually built from, is proof either way without needing
+            // Termux/git log cross-checks on the server side ever again.
+            Text(
+                "Build ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) · ${BuildConfig.GIT_SHA}",
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
