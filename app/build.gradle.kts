@@ -180,8 +180,20 @@ android {
         // outright ("Unresolved reference 'dp'") before the app could even
         // be assembled. A one-line missing import, now added; every other
         // screen file already had it.
-        versionCode = 17
-        versionName = "1.4.11"
+        // Round 48i hotfix 5: from live on-device testing of 1.4.11 --
+        // (1) uptodate.com can show a "Your Privacy" cookie-consent modal
+        // that was never handled at all, now dismissed via "Accept All
+        // Cookies" as the very first priority check; (2) the password step
+        // had no "already submitted" guard, so Sign In was re-clicked on
+        // every ~1.2-2.5s poll while stuck on that page, causing repeated
+        // reloads -- now only fills/clicks once, then just waits; (3) once
+        // any password field exists in the DOM the username-fill branch is
+        // now skipped entirely, fixing the empty username field getting
+        // incorrectly filled after the password step was already reached;
+        // (4) visible() now also checks computed visibility/display/opacity
+        // instead of just layout box size, reducing decoy-field false hits.
+        versionCode = 18
+        versionName = "1.4.12"
         buildConfigField("String", "GIT_SHA", "\"${gitShaForBuild()}\"")
     }
 
