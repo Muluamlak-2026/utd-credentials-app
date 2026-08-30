@@ -71,34 +71,12 @@ fun inspectAndActScript(username: String, password: String): String {
                 return JSON.stringify({status: 'dismissed_popup', url: window.location.href});
             }
 
-            var passField = document.querySelector('input[type="password"]');
-            var passFieldUsable = passField && visible(passField);
-            if (passFieldUsable) {
-                if (passField.value === "$escapedPass") {
-                    // Already filled in on a previous poll and Sign In was
-                    // already clicked -- don't re-fill/re-click on every
-                    // tick, that was causing repeated page reloads and
-                    // could trip anti-automation checks.
-                    return JSON.stringify({status: 'waiting_password_result', url: window.location.href});
-                }
-                passField.focus();
-                passField.value = "$escapedPass";
-                passField.dispatchEvent(new Event('input', { bubbles: true }));
-                passField.dispatchEvent(new Event('change', { bubbles: true }));
-                clickSubmit(passField, ['sign in', 'log in', 'submit']);
-                return JSON.stringify({status: 'submitted_password', url: window.location.href});
-            }
-
-            // Once ANY password field exists anywhere in the DOM (even if
-            // it happens to fail the visible() check on this particular
-            // frame), the flow has already moved past the username step --
-            // never fall through to re-filling username in that case, that
-            // was the "username field which was empty fills" bug.
-            var anyPassField = document.querySelector('input[type="password"]');
-            if (anyPassField) {
-                return JSON.stringify({status: 'waiting_password_field', url: window.location.href});
-            }
-
+            // uptodate.com's login page has turned out to vary: sometimes a
+            // true two-step flow (username-only page, then a separate
+            // password-only page), and sometimes both fields on one page at
+            // once. Rather than assuming either shape, every poll looks at
+            // whatever fields actually exist right now and fills in
+            // whichever ones are empty -- this works for both shapes.
             var userSelectors = [
                 'input[name="username"]', 'input#username',
                 'input[name="email"]', 'input#email',
@@ -111,12 +89,51 @@ fun inspectAndActScript(username: String, password: String): String {
                 var candidate = document.querySelector(userSelectors[i]);
                 if (candidate && visible(candidate)) { userField = candidate; break; }
             }
+            var passField = document.querySelector('input[type="password"]');
+            var passFieldUsable = passField && visible(passField);
+
+            if (passFieldUsable) {
+                // The password field is on screen -- this is the final
+                // step, whether or not a username field is showing
+                // alongside it on the same page. A page-scoped flag (reset
+                // automatically on real navigation, since window is a fresh
+                // object then) guarantees Sign In is only ever clicked
+                // once per page, no matter how many times this poll runs.
+                if (window.__utdSignInClicked) {
+                    return JSON.stringify({status: 'waiting_password_result', url: window.location.href});
+                }
+                var userReady = !userField || !!userField.value;
+                if (userField && !userField.value) {
+                    userField.focus();
+                    userField.value = "$escapedUser";
+                    userField.dispatchEvent(new Event('input', { bubbles: true }));
+                    userField.dispatchEvent(new Event('change', { bubbles: true }));
+                    userReady = true;
+                }
+                if (passField.value !== "$escapedPass") {
+                    passField.focus();
+                    passField.value = "$escapedPass";
+                    passField.dispatchEvent(new Event('input', { bubbles: true }));
+                    passField.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+                if (userReady && passField.value === "$escapedPass") {
+                    clickSubmit(passField, ['sign in', 'log in', 'submit']);
+                    window.__utdSignInClicked = true;
+                    return JSON.stringify({status: 'submitted_password', url: window.location.href});
+                }
+                return JSON.stringify({status: 'filling_password_step', url: window.location.href});
+            }
+
             if (userField && !userField.value) {
+                if (window.__utdContinueClicked) {
+                    return JSON.stringify({status: 'waiting_username_result', url: window.location.href});
+                }
                 userField.focus();
                 userField.value = "$escapedUser";
                 userField.dispatchEvent(new Event('input', { bubbles: true }));
                 userField.dispatchEvent(new Event('change', { bubbles: true }));
                 clickSubmit(userField, ['continue', 'next']);
+                window.__utdContinueClicked = true;
                 return JSON.stringify({status: 'submitted_username', url: window.location.href});
             }
 
@@ -173,7 +190,8 @@ fun statusLabelFor(status: String): String = when (status) {
     "submitted_username" -> "Username submitted, moving to the password step..."
     "submitted_password" -> "Password submitted, checking result..."
     "waiting_password_result" -> "Password submitted, waiting for the page to respond..."
-    "waiting_password_field" -> "On the password step, waiting for the field to become ready..."
+    "waiting_username_result" -> "Username submitted, waiting for the page to respond..."
+    "filling_password_step" -> "Filling in the password step..."
     "dismissed_popup" -> "Dismissed a profile-completion popup, continuing..."
     "accepted_cookies" -> "Accepted the cookie notice, continuing..."
     else -> "Working through login steps..."

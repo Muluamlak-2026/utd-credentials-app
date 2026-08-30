@@ -192,8 +192,20 @@ android {
         // incorrectly filled after the password step was already reached;
         // (4) visible() now also checks computed visibility/display/opacity
         // instead of just layout box size, reducing decoy-field false hits.
-        versionCode = 18
-        versionName = "1.4.12"
+        // Round 48i hotfix 6: hotfix 5's rule (3) above assumed a strict
+        // two-step flow and was wrong -- live testing showed uptodate.com's
+        // page can have BOTH username and password fields visible at once,
+        // and that rule was blocking username from ever being filled
+        // whenever a password field existed on the same page, causing an
+        // instant false "login failed". Replaced with logic that looks at
+        // whichever fields actually exist on each poll and fills whichever
+        // ones are empty (works for one combined page or a real two-step
+        // flow), and swapped the "already submitted" guard for a per-page
+        // JS flag (window.__utdSignInClicked / __utdContinueClicked) so
+        // Sign In/Continue is clicked exactly once per page no matter how
+        // many polls run, instead of gating on field values alone.
+        versionCode = 19
+        versionName = "1.4.13"
         buildConfigField("String", "GIT_SHA", "\"${gitShaForBuild()}\"")
     }
 
