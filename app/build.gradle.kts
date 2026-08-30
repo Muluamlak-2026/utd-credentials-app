@@ -173,8 +173,15 @@ android {
         // could fire before the real page had even finished navigating),
         // and requiring two consecutive "nothing left to fill" readings
         // before trusting a final failure instead of one.
-        versionCode = 16
-        versionName = "1.4.10"
+        // Round 48i hotfix 4: the hotfix-2 build failure's real cause,
+        // confirmed from the actual GitHub Actions compiler log --
+        // UpToDateLoginScreen.kt used "12.dp" / "2.dp" but never imported
+        // androidx.compose.ui.unit.dp, so the Kotlin compiler rejected it
+        // outright ("Unresolved reference 'dp'") before the app could even
+        // be assembled. A one-line missing import, now added; every other
+        // screen file already had it.
+        versionCode = 17
+        versionName = "1.4.11"
         buildConfigField("String", "GIT_SHA", "\"${gitShaForBuild()}\"")
     }
 
