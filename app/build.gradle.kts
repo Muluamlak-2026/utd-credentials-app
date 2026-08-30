@@ -125,8 +125,11 @@ android {
         // from every prior round since 42 that never bumped this. Also
         // bakes in the actual git commit being built (see gitShaForBuild()
         // above) as the definitive answer to "is this really the new code."
-        versionCode = 9
-        versionName = "1.4.3"
+        // Round 48f: compact auto-hiding header (FullSiteScreen.kt) --
+        // bumped per the Round 48e lesson: every code change from now on
+        // gets a bump, no exceptions, so the Build line is always trustworthy.
+        versionCode = 10
+        versionName = "1.4.4"
         buildConfigField("String", "GIT_SHA", "\"${gitShaForBuild()}\"")
     }
 

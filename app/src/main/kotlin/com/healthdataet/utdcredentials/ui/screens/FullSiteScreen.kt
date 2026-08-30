@@ -17,11 +17,18 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Notifications
@@ -38,7 +45,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -106,6 +112,17 @@ fun FullSiteScreen(
     // far the page load has gotten, not just a generic spinner.
     var isPageLoading by remember { mutableStateOf(true) }
     var loadProgress by remember { mutableStateOf(0f) }
+
+    // Round 48f: the header (title + notification/refresh/settings/logout
+    // icons) is now a slim compact bar instead of Material3's default
+    // TopAppBar height, and auto-hides while scrolling the site content
+    // down (more screen for the actual admin panel), reappearing the
+    // moment you scroll back up -- a touchscreen has no mouse to "hover",
+    // so scroll-direction is the mobile equivalent of that ask. Driven by
+    // the WebView's own onScrollChange below, since the page content lives
+    // entirely inside it, not in a Compose-scrollable list this screen
+    // could attach a NestedScrollConnection to directly.
+    var headerVisible by remember { mutableStateOf(true) }
 
     // Round 48: the WebView never had a file-picker wired up at all --
     // every "Choose Files" input on the site (message attachments, bulk
@@ -218,48 +235,85 @@ fun FullSiteScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("UTD Credentials") },
-                actions = {
-                    IconButton(onClick = {
-                        showNotifDialog = true
-                        notificationCount = 0
-                        // Clear the shared counter too, not just the local
-                        // display -- otherwise the next poll's re-sync
-                        // (above) would immediately bring the badge right
-                        // back with the same already-seen count.
-                        session.unreadNotificationCount = 0
-                    }) {
-                        BadgedBox(badge = {
-                            if (notificationCount > 0) Badge { Text(notificationCount.toString()) }
-                        }) {
-                            Icon(Icons.Filled.Notifications, contentDescription = "Notifications")
-                        }
-                    }
-                    IconButton(onClick = { webViewRef?.reload() }) {
-                        Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
-                    }
-                    IconButton(onClick = onOpenAppSettings) {
-                        Icon(Icons.Filled.Settings, contentDescription = "App Settings")
-                    }
-                    IconButton(onClick = {
-                        val apiToken = session.apiToken
-                        val fcmToken = session.fcmToken
-                        scope.launch {
-                            if (apiToken != null) {
-                                withContext(Dispatchers.IO) {
-                                    ApiClient(session.baseUrl).logout(apiToken, fcmToken)
+            // Round 48f: a slim 44dp custom header (Material3's TopAppBar
+            // enforces its own ~64dp height regardless of any height
+            // modifier applied to it, so a real compact bar means not
+            // using that composable) that slides away while scrolling the
+            // WebView content down, and slides back on scroll-up -- see
+            // headerVisible above / the WebView's onScrollChange below.
+            AnimatedVisibility(
+                visible = headerVisible,
+                enter = expandVertically(),
+                exit = shrinkVertically()
+            ) {
+                Surface(tonalElevation = 2.dp) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp)
+                            .padding(horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            "UTD Credentials",
+                            style = MaterialTheme.typography.titleSmall,
+                            modifier = Modifier.padding(start = 8.dp)
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(
+                                modifier = Modifier.size(36.dp),
+                                onClick = {
+                                    showNotifDialog = true
+                                    notificationCount = 0
+                                    // Clear the shared counter too, not just the local
+                                    // display -- otherwise the next poll's re-sync
+                                    // (above) would immediately bring the badge right
+                                    // back with the same already-seen count.
+                                    session.unreadNotificationCount = 0
+                                }
+                            ) {
+                                BadgedBox(badge = {
+                                    if (notificationCount > 0) Badge { Text(notificationCount.toString()) }
+                                }) {
+                                    Icon(Icons.Filled.Notifications, contentDescription = "Notifications")
                                 }
                             }
-                            CookieManager.getInstance().removeAllCookies(null)
-                            session.clear()
-                            onLoggedOut()
+                            IconButton(
+                                modifier = Modifier.size(36.dp),
+                                onClick = { webViewRef?.reload() }
+                            ) {
+                                Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
+                            }
+                            IconButton(
+                                modifier = Modifier.size(36.dp),
+                                onClick = onOpenAppSettings
+                            ) {
+                                Icon(Icons.Filled.Settings, contentDescription = "App Settings")
+                            }
+                            IconButton(
+                                modifier = Modifier.size(36.dp),
+                                onClick = {
+                                    val apiToken = session.apiToken
+                                    val fcmToken = session.fcmToken
+                                    scope.launch {
+                                        if (apiToken != null) {
+                                            withContext(Dispatchers.IO) {
+                                                ApiClient(session.baseUrl).logout(apiToken, fcmToken)
+                                            }
+                                        }
+                                        CookieManager.getInstance().removeAllCookies(null)
+                                        session.clear()
+                                        onLoggedOut()
+                                    }
+                                }
+                            ) {
+                                Icon(Icons.Filled.ExitToApp, contentDescription = "Log out")
+                            }
                         }
-                    }) {
-                        Icon(Icons.Filled.ExitToApp, contentDescription = "Log out")
                     }
                 }
-            )
+            }
         }
     ) { padding ->
         Box(
@@ -288,6 +342,22 @@ fun FullSiteScreen(
 
                     CookieManager.getInstance().setAcceptCookie(true)
                     CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+
+                    // Round 48f: hide the compact header on scroll-down,
+                    // bring it back on scroll-up -- a small buffer (12px)
+                    // avoids it flickering on the tiny scroll jitters some
+                    // pages fire continuously. Only reacts once real
+                    // scrolling is happening (scrollY > 0 already covers
+                    // "scrolled down at all"; the very top always keeps it
+                    // visible so it doesn't hide itself immediately on a
+                    // page that loads already scrolled to 0,0).
+                    setOnScrollChangeListener { _, _, scrollY, _, oldScrollY ->
+                        when {
+                            scrollY <= 0 -> headerVisible = true
+                            scrollY > oldScrollY + 12 -> headerVisible = false
+                            scrollY < oldScrollY - 12 -> headerVisible = true
+                        }
+                    }
 
                     webChromeClient = object : WebChromeClient() {
                         override fun onProgressChanged(view: WebView?, newProgress: Int) {
