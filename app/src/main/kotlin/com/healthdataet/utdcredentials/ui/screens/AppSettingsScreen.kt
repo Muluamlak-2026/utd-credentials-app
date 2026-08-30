@@ -51,7 +51,8 @@ fun AppSettingsScreen(
     onBack: () -> Unit,
     onOpenNotifications: () -> Unit,
     onOpenSecurity: () -> Unit,
-    onOpenDiagnostics: () -> Unit
+    onOpenDiagnostics: () -> Unit,
+    onOpenCredentialLogin: () -> Unit
 ) {
     val context = LocalContext.current
     val appearancePrefs = remember { AppearancePrefs(context) }
@@ -94,6 +95,19 @@ fun AppSettingsScreen(
                 title = "Diagnostics",
                 subtitle = "View saved crash logs, if this app has ever run into a problem",
                 onClick = onOpenDiagnostics
+            )
+            HorizontalDivider()
+            // Round 48i: "a separate panel in which importing or selecting
+            // among a sourced credentials will be done and an automated
+            // username and password injection in to in apk inbuilt
+            // dedicated browser" -- pick one or many stored credentials and
+            // auto-fill (or, for several at once, auto-submit and report
+            // success/failure) straight into uptodate.com's real login page.
+            SettingsLinkRow(
+                title = "UpToDate Quick Login",
+                subtitle = "Pick a stored credential and log straight into uptodate.com, " +
+                    "auto-filled -- or run several in sequence with a pass/fail report",
+                onClick = onOpenCredentialLogin
             )
             HorizontalDivider()
 

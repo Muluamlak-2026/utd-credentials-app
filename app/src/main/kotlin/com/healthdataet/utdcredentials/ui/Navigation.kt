@@ -18,11 +18,14 @@ import com.healthdataet.utdcredentials.data.AppLockPrefs
 import com.healthdataet.utdcredentials.data.SessionManager
 import com.healthdataet.utdcredentials.ui.screens.AppSettingsScreen
 import com.healthdataet.utdcredentials.ui.screens.CrashLogScreen
+import com.healthdataet.utdcredentials.ui.screens.CredentialPickerScreen
 import com.healthdataet.utdcredentials.ui.screens.FullSiteScreen
 import com.healthdataet.utdcredentials.ui.screens.LockScreen
 import com.healthdataet.utdcredentials.ui.screens.LoginScreen
 import com.healthdataet.utdcredentials.ui.screens.SecuritySettingsScreen
+import com.healthdataet.utdcredentials.ui.screens.SequentialLoginScreen
 import com.healthdataet.utdcredentials.ui.screens.SoundSettingsScreen
+import com.healthdataet.utdcredentials.ui.screens.UpToDateLoginScreen
 
 private const val ROUTE_LOGIN = "login"
 private const val ROUTE_SITE = "site"
@@ -30,6 +33,15 @@ private const val ROUTE_APP_SETTINGS = "app_settings"
 private const val ROUTE_SOUNDS = "sounds"
 private const val ROUTE_SECURITY = "security"
 private const val ROUTE_DIAGNOSTICS = "diagnostics"
+// Round 48i: the UpToDate quick-login feature -- pick a stored credential
+// (ROUTE_CREDENTIAL_PICKER), either open it once in a fill-only WebView
+// (ROUTE_UPTODATE_LOGIN) or run several through an unattended sequential
+// login-and-report batch (ROUTE_SEQUENTIAL_LOGIN, added per the follow-up
+// request for "sequential auto login, log out with successful or failure
+// report of login for each pair of credentials").
+private const val ROUTE_CREDENTIAL_PICKER = "credential_picker"
+private const val ROUTE_UPTODATE_LOGIN = "uptodate_login"
+private const val ROUTE_SEQUENTIAL_LOGIN = "sequential_login"
 
 /** Round 47b: how long the app stays unlocked after being backgrounded
  * (switched to another app, or minimized) before the lock gate re-arms.
@@ -140,7 +152,8 @@ fun AppNavHost() {
                 onBack = { navController.popBackStack() },
                 onOpenNotifications = { navController.navigate(ROUTE_SOUNDS) },
                 onOpenSecurity = { navController.navigate(ROUTE_SECURITY) },
-                onOpenDiagnostics = { navController.navigate(ROUTE_DIAGNOSTICS) }
+                onOpenDiagnostics = { navController.navigate(ROUTE_DIAGNOSTICS) },
+                onOpenCredentialLogin = { navController.navigate(ROUTE_CREDENTIAL_PICKER) }
             )
         }
         composable(ROUTE_SOUNDS) {
@@ -151,6 +164,20 @@ fun AppNavHost() {
         }
         composable(ROUTE_DIAGNOSTICS) {
             CrashLogScreen(onBack = { navController.popBackStack() })
+        }
+        composable(ROUTE_CREDENTIAL_PICKER) {
+            CredentialPickerScreen(
+                session = session,
+                onBack = { navController.popBackStack() },
+                onCredentialChosen = { navController.navigate(ROUTE_UPTODATE_LOGIN) },
+                onRunSequential = { navController.navigate(ROUTE_SEQUENTIAL_LOGIN) }
+            )
+        }
+        composable(ROUTE_UPTODATE_LOGIN) {
+            UpToDateLoginScreen(onBack = { navController.popBackStack() })
+        }
+        composable(ROUTE_SEQUENTIAL_LOGIN) {
+            SequentialLoginScreen(onBack = { navController.popBackStack() })
         }
     }
 }

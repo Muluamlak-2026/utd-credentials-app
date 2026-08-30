@@ -133,8 +133,14 @@ android {
         // Round 48h: real, working poll-interval settings (foreground
         // seconds + background minutes) -- see PollIntervalPrefs.kt,
         // NotificationPollWorker.kt, FullSiteScreen.kt, SoundSettingsScreen.kt.
-        versionCode = 12
-        versionName = "1.4.6"
+        // Round 48i: UpToDate quick-login -- a new panel to pick a stored
+        // credential and auto-fill it into uptodate.com's real login page
+        // (CredentialPickerScreen.kt, UpToDateLoginScreen.kt), plus a
+        // sequential batch mode that logs into several in a row, clears the
+        // session between each, and reports success/failure per credential
+        // (SequentialLoginScreen.kt).
+        versionCode = 13
+        versionName = "1.4.7"
         buildConfigField("String", "GIT_SHA", "\"${gitShaForBuild()}\"")
     }
 

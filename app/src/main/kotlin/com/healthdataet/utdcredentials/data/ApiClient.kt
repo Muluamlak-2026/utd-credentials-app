@@ -91,4 +91,14 @@ class ApiClient(private val baseUrl: String) {
     fun pollNotifications(token: String, sinceId: Long): ApiResult {
         return getWithAuth("/api/v1/notifications/poll?since_id=$sinceId&limit=50", token)
     }
+
+    /** Round 48i: backs CredentialPickerScreen -- the same unified
+     * active/draft/pool/legacy credential list the web Credentials Hub
+     * already shows, searchable so a long pool never has to be scrolled
+     * through blind. [query] blank means "everything" (capped server-side
+     * at 200 rows). */
+    fun listCredentials(token: String, query: String): ApiResult {
+        val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
+        return getWithAuth("/api/v1/credentials/list?q=$encodedQuery", token)
+    }
 }
