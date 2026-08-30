@@ -139,8 +139,18 @@ android {
         // sequential batch mode that logs into several in a row, clears the
         // session between each, and reports success/failure per credential
         // (SequentialLoginScreen.kt).
-        versionCode = 13
-        versionName = "1.4.7"
+        // Round 48i hotfix: the sequential batch's first version assumed
+        // uptodate.com's login was one combined username+password form --
+        // it's actually two separate steps (username+Continue, THEN a
+        // separate password+Sign In page), which is exactly why every
+        // batch attempt was reporting "still on the login page" without
+        // ever having a chance to fill the password. SequentialLoginScreen
+        // now re-inspects the actual page on a timer and handles whichever
+        // step is currently showing (including uptodate.com's occasional
+        // "complete your profile" popup, dismissed automatically) instead
+        // of assuming a single fill-then-submit pass.
+        versionCode = 14
+        versionName = "1.4.8"
         buildConfigField("String", "GIT_SHA", "\"${gitShaForBuild()}\"")
     }
 

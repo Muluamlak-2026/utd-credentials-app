@@ -47,36 +47,95 @@ private const val UPTODATE_LOGIN_URL = "https://www.uptodate.com/login"
 // unexpected 2FA step, or a genuinely slow connection all look the same
 // from here (no clear success/failure signal), so a hard ceiling per
 // attempt is what keeps a batch of N credentials from turning into an
-// infinite wait on credential #1.
-private const val ATTEMPT_TIMEOUT_MS = 25_000L
+// infinite wait on credential #1. Bumped from the original 25s: the real
+// uptodate.com login is TWO steps (username+Continue, then a separate
+// password+Sign-in page), not one, so a single attempt needs enough room
+// for two round trips plus the popup uptodate.com sometimes shows in
+// between (see INSPECT_INTERVAL_MS below).
+private const val ATTEMPT_TIMEOUT_MS = 35_000L
 
-// After the submit script fires, give the destination page a moment to
-// actually finish redirecting/rendering before reading it -- some login
-// flows bounce through an intermediate page first.
-private const val POST_SUBMIT_SETTLE_MS = 3_000L
+// How often the inspect-and-act script re-checks the page. Deliberately a
+// tight poll rather than a single one-shot check after submit: uptodate.com
+// moving from the username step to the password step does not necessarily
+// fire a fresh WebViewClient.onPageFinished (it can render the password
+// field in via its own JS without a full navigation), so this keeps
+// looking on a timer instead of waiting for a page-load event that might
+// never come a second time.
+private const val INSPECT_INTERVAL_MS = 1200L
 
-/** Same defensive multi-selector fill approach as UpToDateLoginScreen's
- * autofillScript -- duplicated here (rather than shared) so this file's
- * unattended, auto-SUBMITTING flow stays clearly separate from that
- * screen's deliberately fill-only, manual-submit one. */
-private fun fillScript(username: String, password: String): String {
+/**
+ * Round 48i(+): the real uptodate.com login turned out to be a TWO-STEP
+ * flow -- username + "Continue" first, THEN a separate page/step for
+ * password + "Sign in" -- not the single combined form the original
+ * fill-everything-at-once script assumed. That mismatch is exactly what
+ * was causing every sequential attempt to report "still on the login page"
+ * (this script filled username, clicked whatever it found, then checked
+ * for a result far too early -- before the password step had even
+ * appeared, let alone been filled in).
+ *
+ * This single script is now called repeatedly (see INSPECT_INTERVAL_MS)
+ * and, each time, looks at whatever is ACTUALLY on screen right now and
+ * does the one next right thing:
+ *   1. If uptodate.com's "Please complete your profile" nag is showing,
+ *      dismiss it via "Ask Again Tomorrow" so it never blocks the real
+ *      flow (per the user's own instruction on how to handle it).
+ *   2. Else if a password field is visible, fill it in and click Sign In
+ *      (the password step).
+ *   3. Else if an not-yet-filled username field is visible, fill it in and
+ *      click Continue (the username step).
+ *   4. Else (no recognized field left to act on) -- this is treated as the
+ *      destination page: scan its visible text for an obvious error
+ *      keyword and report back what URL we ended up on.
+ * Kotlin only needs to act on step 4's answer; steps 1-3 just mean "keep
+ * polling, something changed". This handles the flow whether uptodate.com
+ * does a real page navigation between steps or just swaps the form in
+ * with JS, without needing to guess which. */
+private fun inspectAndActScript(username: String, password: String): String {
     val escapedUser = username.replace("\\", "\\\\").replace("\"", "\\\"")
     val escapedPass = password.replace("\\", "\\\\").replace("\"", "\\\"")
     return """
         (function() {
-            function fillOne(selectors, value) {
-                for (var i = 0; i < selectors.length; i++) {
-                    var el = document.querySelector(selectors[i]);
-                    if (el) {
-                        el.focus();
-                        el.value = value;
-                        el.dispatchEvent(new Event('input', { bubbles: true }));
-                        el.dispatchEvent(new Event('change', { bubbles: true }));
-                        return true;
-                    }
-                }
-                return false;
+            function visible(el) {
+                if (!el) return false;
+                var rect = el.getBoundingClientRect();
+                return !!(rect.width || rect.height) && el.offsetParent !== null;
             }
+            function clickSubmitNear(el) {
+                var btn = document.querySelector('button[type="submit"], input[type="submit"]');
+                if (btn && visible(btn)) { btn.click(); return; }
+                var form = el ? el.form : null;
+                if (form) {
+                    if (typeof form.requestSubmit === 'function') { form.requestSubmit(); }
+                    else { form.submit(); }
+                }
+            }
+
+            // Step: the "Please complete your profile" popup some
+            // credentials show mid-flow -- just dismiss it and keep going,
+            // per the confirmed instruction to click "Ask Again Tomorrow".
+            var allClickable = document.querySelectorAll('button, a, input[type="button"]');
+            for (var k = 0; k < allClickable.length; k++) {
+                var t = (allClickable[k].innerText || allClickable[k].value || '').trim();
+                if (t.indexOf('Ask Again Tomorrow') !== -1 && visible(allClickable[k])) {
+                    allClickable[k].click();
+                    return JSON.stringify({status: 'dismissed_popup', url: window.location.href});
+                }
+            }
+
+            // Step: password field visible -> this is the second step of
+            // the real flow -- fill it and click Sign In.
+            var passField = document.querySelector('input[type="password"]');
+            if (passField && visible(passField)) {
+                passField.focus();
+                passField.value = "$escapedPass";
+                passField.dispatchEvent(new Event('input', { bubbles: true }));
+                passField.dispatchEvent(new Event('change', { bubbles: true }));
+                clickSubmitNear(passField);
+                return JSON.stringify({status: 'submitted_password', url: window.location.href});
+            }
+
+            // Step: username field visible and not yet filled -> this is
+            // the first step -- fill it and click Continue.
             var userSelectors = [
                 'input[name="username"]', 'input#username',
                 'input[name="email"]', 'input#email',
@@ -84,56 +143,33 @@ private fun fillScript(username: String, password: String): String {
                 'input[autocomplete="username"]',
                 'input[name="j_username"]'
             ];
-            var passSelectors = [
-                'input[name="password"]', 'input#password',
-                'input[type="password"]',
-                'input[autocomplete="current-password"]',
-                'input[name="j_password"]'
-            ];
-            fillOne(userSelectors, "$escapedUser");
-            fillOne(passSelectors, "$escapedPass");
+            var userField = null;
+            for (var i = 0; i < userSelectors.length; i++) {
+                var candidate = document.querySelector(userSelectors[i]);
+                if (candidate && visible(candidate)) { userField = candidate; break; }
+            }
+            if (userField && !userField.value) {
+                userField.focus();
+                userField.value = "$escapedUser";
+                userField.dispatchEvent(new Event('input', { bubbles: true }));
+                userField.dispatchEvent(new Event('change', { bubbles: true }));
+                clickSubmitNear(userField);
+                return JSON.stringify({status: 'submitted_username', url: window.location.href});
+            }
+
+            // Neither step's field is present/actionable any more --
+            // treat this as the destination page and look for an obvious
+            // error message in whatever's currently visible.
+            var bodyText = (document.body ? document.body.innerText : '').toLowerCase();
+            var errorHit = null;
+            var needles = ['incorrect', 'invalid', 'does not match', 'try again', 'failed', 'locked out', 'error'];
+            for (var j = 0; j < needles.length; j++) {
+                if (bodyText.indexOf(needles[j]) !== -1) { errorHit = needles[j]; break; }
+            }
+            return JSON.stringify({status: 'final', url: window.location.href, errorHit: errorHit});
         })();
     """.trimIndent()
 }
-
-/** Best-effort submit -- tries a real submit button first, falls back to
- * submitting the form directly. This is the one deliberate difference from
- * UpToDateLoginScreen: that screen never auto-submits (the admin taps Log
- * In themselves); this one must, because the whole point of a sequential
- * batch run is going through many credentials unattended. */
-private fun submitScript(): String = """
-    (function() {
-        var btn = document.querySelector(
-            'button[type="submit"], input[type="submit"], button#login-submit'
-        );
-        if (btn) { btn.click(); return true; }
-        var form = document.querySelector('form');
-        if (form) {
-            if (typeof form.requestSubmit === 'function') { form.requestSubmit(); }
-            else { form.submit(); }
-            return true;
-        }
-        return false;
-    })();
-""".trimIndent()
-
-/** Runs after a post-submit navigation to read where we actually ended up
- * and whether the page is showing an obvious error message. Returns a JSON
- * string (double-encoded by evaluateJavascript's own callback contract --
- * see interpretCheckResult) rather than anything more structured, since
- * this is a best-effort heuristic against a real third-party page whose
- * exact markup can't be verified from outside a live login attempt. */
-private const val CHECK_SCRIPT = """
-    (function() {
-        var bodyText = (document.body ? document.body.innerText : '').toLowerCase();
-        var errorHit = null;
-        var needles = ['incorrect', 'invalid', 'does not match', 'try again', 'failed', 'locked out', 'error'];
-        for (var i = 0; i < needles.length; i++) {
-            if (bodyText.indexOf(needles[i]) !== -1) { errorHit = needles[i]; break; }
-        }
-        return JSON.stringify({url: window.location.href, errorHit: errorHit});
-    })();
-"""
 
 sealed class LoginAttemptOutcome {
     object Success : LoginAttemptOutcome()
@@ -147,15 +183,16 @@ data class LoginAttemptResult(
     val outcome: LoginAttemptOutcome
 )
 
+private data class InspectResult(val status: String, val url: String?, val errorHit: String?)
+
 /** evaluateJavascript's callback hands back the JSON-encoded form of
- * whatever the script returned -- since CHECK_SCRIPT itself returns a
- * JSON.stringify'd string, the raw callback value is that string, quoted
+ * whatever the script returned -- since inspectAndActScript itself returns
+ * a JSON.stringify'd string, the raw callback value is that string, quoted
  * and escaped a second time by evaluateJavascript's own contract. This
  * undoes that outer layer before parsing; if anything about the real page
- * doesn't match what was anticipated, this falls back to the URL captured
- * at onPageFinished and treats the result as ambiguous/failed rather than
- * guessing success. */
-private fun interpretCheckResult(raw: String?, urlAtPageFinished: String?): LoginAttemptOutcome {
+ * doesn't match what was anticipated, this falls back to an "unknown"
+ * status so the caller just keeps polling rather than guessing. */
+private fun interpretInspectResult(raw: String?): InspectResult {
     val unwrapped = raw?.trim()
         ?.removeSurrounding("\"")
         ?.replace("\\\"", "\"")
@@ -165,16 +202,30 @@ private fun interpretCheckResult(raw: String?, urlAtPageFinished: String?): Logi
     } catch (e: Exception) {
         null
     }
-    val finalUrl = json?.optString("url")?.takeIf { it.isNotBlank() } ?: urlAtPageFinished ?: ""
-    val errorHit = json?.optString("errorHit")?.takeIf { it.isNotBlank() && it != "null" }
+    return InspectResult(
+        status = json?.optString("status")?.takeIf { it.isNotBlank() } ?: "unknown",
+        url = json?.optString("url")?.takeIf { it.isNotBlank() },
+        errorHit = json?.optString("errorHit")?.takeIf { it.isNotBlank() && it != "null" }
+    )
+}
+
+private fun outcomeFromFinal(result: InspectResult): LoginAttemptOutcome {
+    val finalUrl = result.url ?: ""
     val stillOnLogin = finalUrl.contains("login", ignoreCase = true)
     return when {
-        errorHit != null -> LoginAttemptOutcome.Failed("page shows \"$errorHit\"")
+        result.errorHit != null -> LoginAttemptOutcome.Failed("page shows \"${result.errorHit}\"")
         !stillOnLogin -> LoginAttemptOutcome.Success
         else -> LoginAttemptOutcome.Failed(
-            "still on the login page after submitting -- may need a CAPTCHA/verification step done by hand"
+            "still on the login page after the full username+password sequence -- may need a CAPTCHA/verification step done by hand"
         )
     }
+}
+
+private fun statusLabelFor(status: String): String = when (status) {
+    "submitted_username" -> "Username submitted, moving to the password step..."
+    "submitted_password" -> "Password submitted, checking result..."
+    "dismissed_popup" -> "Dismissed a profile-completion popup, continuing..."
+    else -> "Working through login steps..."
 }
 
 /** One unattended login attempt: fresh WebView, cleared cookies/cache (the
@@ -192,7 +243,6 @@ private fun LoginAttemptRunner(
     onDone: (LoginAttemptOutcome) -> Unit
 ) {
     var resolved by remember { mutableStateOf(false) }
-    var submitted by remember { mutableStateOf(false) }
 
     fun resolveOnce(outcome: LoginAttemptOutcome) {
         if (!resolved) {
@@ -217,6 +267,30 @@ private fun LoginAttemptRunner(
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = { ctx ->
+            var loopStarted = false
+
+            // Repeatedly inspects the page and acts on whatever step is
+            // currently showing (see inspectAndActScript's doc comment) --
+            // self-reschedules on a timer rather than waiting on
+            // onPageFinished a second time, since uptodate.com's own move
+            // from the username step to the password step doesn't
+            // necessarily fire a fresh page-load event.
+            fun scheduleInspect(view: WebView) {
+                view.postDelayed({
+                    if (resolved) return@postDelayed
+                    view.evaluateJavascript(inspectAndActScript(username, password)) { raw ->
+                        if (resolved) return@evaluateJavascript
+                        val result = interpretInspectResult(raw)
+                        if (result.status == "final") {
+                            resolveOnce(outcomeFromFinal(result))
+                        } else {
+                            onStatusChange(statusLabelFor(result.status))
+                            scheduleInspect(view)
+                        }
+                    }
+                }, INSPECT_INTERVAL_MS)
+            }
+
             WebView(ctx).apply {
                 layoutParams = ViewGroup.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
@@ -243,25 +317,16 @@ private fun LoginAttemptRunner(
 
                     override fun onPageFinished(view: WebView, url: String?) {
                         super.onPageFinished(view, url)
-                        if (!submitted) {
-                            onStatusChange("Filling credentials...")
-                            val fill = fillScript(username, password)
-                            view.evaluateJavascript(fill, null)
-                            view.postDelayed({
-                                view.evaluateJavascript(fill, null)
-                                view.postDelayed({
-                                    submitted = true
-                                    onStatusChange("Submitting...")
-                                    view.evaluateJavascript(submitScript(), null)
-                                }, 500)
-                            }, 700)
-                        } else {
-                            onStatusChange("Checking result...")
-                            view.postDelayed({
-                                view.evaluateJavascript(CHECK_SCRIPT) { rawResult ->
-                                    resolveOnce(interpretCheckResult(rawResult, url))
-                                }
-                            }, POST_SUBMIT_SETTLE_MS)
+                        // Only kick the poll loop off once -- if
+                        // uptodate.com navigates again mid-flow (the real
+                        // step-2 page), the already-running loop notices
+                        // that on its own next tick rather than starting a
+                        // second loop alongside it (which could double
+                        // click/submit).
+                        if (!loopStarted) {
+                            loopStarted = true
+                            onStatusChange("Working through login steps...")
+                            scheduleInspect(view)
                         }
                     }
                 }
@@ -322,11 +387,18 @@ private fun ResultRow(result: LoginAttemptResult) {
  * report builds up below as each attempt finishes; a "Stop" action in the
  * top bar ends the run early without losing the results gathered so far.
  *
- * Success/failure detection is necessarily a best-effort heuristic (see
- * interpretCheckResult) since uptodate.com's exact markup can't be
- * verified from outside a live attempt -- a CAPTCHA or 2FA step would
- * likely show up here as a "still on the login page" failure, which is
- * the honest, safe read rather than a false "success".
+ * uptodate.com's real login turned out to be a two-step flow (username +
+ * Continue, then a separate password + Sign In step, with an occasional
+ * "complete your profile" popup in between) -- inspectAndActScript handles
+ * all of that by re-checking what's actually on screen on a timer and
+ * acting on whichever step is currently showing, rather than assuming one
+ * fill-everything-then-submit-once pass.
+ *
+ * Success/failure detection is still necessarily a best-effort heuristic
+ * since uptodate.com's exact markup can't be verified from outside a live
+ * attempt -- a genuine CAPTCHA or 2FA step would still show up here as a
+ * "still on the login page" failure, which is the honest, safe read rather
+ * than a guessed false "success".
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
