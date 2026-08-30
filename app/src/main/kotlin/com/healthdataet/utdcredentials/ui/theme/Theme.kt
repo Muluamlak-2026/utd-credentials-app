@@ -41,12 +41,21 @@ fun UtdCredentialsTheme(content: @Composable () -> Unit) {
     val themeMode by AppearancePrefs.themeModeState.collectAsState()
     val accentKey by AppearancePrefs.accentKeyState.collectAsState()
     val accent = Color(AppearancePrefs.accentArgb(accentKey))
+    // Round 48p (contrast pass): paired with the picked accent explicitly --
+    // see accentOnPrimaryArgb's own doc comment for why Material3's default
+    // onPrimary (white) can't be trusted to read clearly on every one of
+    // these 5 accent choices.
+    val onAccent = Color(AppearancePrefs.accentOnPrimaryArgb(accentKey))
 
     val isDark = when (themeMode) {
         AppearancePrefs.THEME_LIGHT -> false
         AppearancePrefs.THEME_DARK -> true
         else -> isSystemInDarkTheme()
     }
-    val colors = if (isDark) darkColorScheme(primary = accent) else lightColorScheme(primary = accent)
+    val colors = if (isDark) {
+        darkColorScheme(primary = accent, onPrimary = onAccent)
+    } else {
+        lightColorScheme(primary = accent, onPrimary = onAccent)
+    }
     MaterialTheme(colorScheme = colors, content = content)
 }

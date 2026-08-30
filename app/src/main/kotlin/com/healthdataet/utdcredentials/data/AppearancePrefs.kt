@@ -101,6 +101,37 @@ class AppearancePrefs(context: Context) {
             else -> 0xFF6366F1
         }
 
+        /**
+         * Round 48p (contrast pass): every filled Button/FAB/etc. in
+         * Material3 draws its label in colorScheme.onPrimary on top of
+         * colorScheme.primary -- but Material3's own default onPrimary
+         * (white) is tuned for ITS default purple primary, not for
+         * whichever of these 5 accents the admin actually picked. Measured
+         * white-on-Green at ~3.3:1 and white-on-Orange at ~3.6:1 -- both
+         * well under the 4.5:1 WCAG AA minimum for normal text, i.e.
+         * visibly hard to read. Rather than hand-guess which of black/white
+         * looks right per color, this computes each color's actual
+         * relative luminance (the same formula the WCAG contrast spec
+         * itself defines) and returns whichever of pure black/white has
+         * the higher measured contrast against it -- correct for all 5
+         * accents today and for any new accent color added later, with no
+         * per-color guesswork to keep in sync.
+         */
+        fun accentOnPrimaryArgb(key: String): Long {
+            val primary = accentArgb(key)
+            val r = ((primary shr 16) and 0xFF).toInt()
+            val g = ((primary shr 8) and 0xFF).toInt()
+            val b = (primary and 0xFF).toInt()
+            fun channelLuminance(c: Int): Double {
+                val cs = c / 255.0
+                return if (cs <= 0.03928) cs / 12.92 else Math.pow((cs + 0.055) / 1.055, 2.4)
+            }
+            val luminance = 0.2126 * channelLuminance(r) + 0.7152 * channelLuminance(g) + 0.0722 * channelLuminance(b)
+            val contrastWithBlack = (luminance + 0.05) / (0.0 + 0.05)
+            val contrastWithWhite = (1.0 + 0.05) / (luminance + 0.05)
+            return if (contrastWithBlack >= contrastWithWhite) 0xFF000000 else 0xFFFFFFFF
+        }
+
         // Round 42 fix: process-wide (one per app process, not one per
         // AppearancePrefs instance -- companion object members are shared
         // across every instance) so a write made through ANY instance is

@@ -345,8 +345,23 @@ android {
         // "can't reach the server" screen, instead of giving up on the very
         // first transient blip -- likely the real cause of the reported
         // "page reloading instabilities" on a weak connection.
-        versionCode = 27
-        versionName = "1.4.21"
+        // Round 48p hotfix 2 (contrast pass, in response to the user's
+        // explicit "make the backgrounds and page contents contrasting"
+        // request when closing the project): Material3's default onPrimary
+        // (white) doesn't actually read clearly on every one of this app's
+        // 5 selectable accent colors -- measured white-on-Green at ~3.3:1
+        // and white-on-Orange at ~3.6:1, both under the 4.5:1 WCAG AA
+        // minimum for normal text, meaning filled Button/FAB labels in
+        // those themes were genuinely hard to read. AppearancePrefs now
+        // computes, per accent, whichever of pure black/white has the
+        // higher measured contrast against that exact color (via the same
+        // relative-luminance formula WCAG itself defines) and Theme.kt
+        // passes that as onPrimary explicitly, instead of trusting
+        // Material3's one-size-fits-all default. No accent color itself
+        // changed -- only the text drawn on top of it, and only where it
+        // was actually hard to read.
+        versionCode = 28
+        versionName = "1.4.22"
         buildConfigField("String", "GIT_SHA", "\"${gitShaForBuild()}\"")
     }
 
