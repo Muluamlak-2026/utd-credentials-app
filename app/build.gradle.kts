@@ -149,8 +149,15 @@ android {
         // step is currently showing (including uptodate.com's occasional
         // "complete your profile" popup, dismissed automatically) instead
         // of assuming a single fill-then-submit pass.
-        versionCode = 14
-        versionName = "1.4.8"
+        // Round 48i hotfix 2: the same two-step automation is now shared
+        // with the single quick-login screen (LoginAutomation.kt) -- it no
+        // longer stops after filling the username and waiting for the
+        // admin to tap Continue/Sign In themselves; it fills AND submits
+        // both steps unattended, the same as the batch runner does per
+        // credential, while staying fully touchable so the admin can take
+        // over by hand if something it can't handle (CAPTCHA/2FA) shows up.
+        versionCode = 15
+        versionName = "1.4.9"
         buildConfigField("String", "GIT_SHA", "\"${gitShaForBuild()}\"")
     }
 

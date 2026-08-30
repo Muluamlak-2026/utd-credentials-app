@@ -7,6 +7,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -17,78 +18,46 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import com.healthdataet.utdcredentials.data.PendingUpToDateLogin
-
-private const val UPTODATE_LOGIN_URL = "https://www.uptodate.com/login"
-
-/** Builds the best-effort autofill script for whatever field(s) actually
- * exist on the CURRENT page -- uptodate.com's real login flow may ask for
- * username and password on one combined page, or as separate steps; this
- * runs on every single page load inside this screen (see onPageFinished
- * below) so whichever step is showing right now gets whatever field(s) it
- * has filled in. Tries several selector patterns per field since the
- * exact real markup can't be verified from outside a live login attempt --
- * if uptodate.com's actual field names/ids differ from all of these, only
- * this one function needs updating. Deliberately fills only -- never
- * auto-submits/clicks a login button -- so a change of flow, a CAPTCHA, or
- * a 2FA step on their side never gets silently bypassed or broken; the
- * admin still taps the real "Log In" button themselves once the fields
- * are filled. */
-private fun autofillScript(username: String, password: String): String {
-    val escapedUser = username.replace("\\", "\\\\").replace("\"", "\\\"")
-    val escapedPass = password.replace("\\", "\\\\").replace("\"", "\\\"")
-    return """
-        (function() {
-            function fillOne(selectors, value) {
-                for (var i = 0; i < selectors.length; i++) {
-                    var el = document.querySelector(selectors[i]);
-                    if (el) {
-                        el.focus();
-                        el.value = value;
-                        el.dispatchEvent(new Event('input', { bubbles: true }));
-                        el.dispatchEvent(new Event('change', { bubbles: true }));
-                        return true;
-                    }
-                }
-                return false;
-            }
-            var userSelectors = [
-                'input[name="username"]', 'input#username',
-                'input[name="email"]', 'input#email',
-                'input[type="email"]',
-                'input[autocomplete="username"]',
-                'input[name="j_username"]'
-            ];
-            var passSelectors = [
-                'input[name="password"]', 'input#password',
-                'input[type="password"]',
-                'input[autocomplete="current-password"]',
-                'input[name="j_password"]'
-            ];
-            fillOne(userSelectors, "$escapedUser");
-            fillOne(passSelectors, "$escapedPass");
-        })();
-    """.trimIndent()
-}
+import kotlinx.coroutines.delay
 
 /**
  * Round 48i: the WebView half of the UpToDate quick-login feature --
  * CredentialPickerScreen hands off exactly one username/password pair via
- * PendingUpToDateLogin, this screen loads uptodate.com's real login page
- * and fills them in automatically. Consumed once on first load; a manual
- * refresh (the toolbar's Refresh icon) re-fills using the same pair in
- * case the page reloads or the fields render in after a delay, without
- * needing to go back and re-pick the same credential again.
+ * PendingUpToDateLogin, this screen loads uptodate.com's real login page.
+ *
+ * Round 48i(+): originally this screen only filled the field(s) in and
+ * left the admin to tap Continue/Sign In themselves -- once the sequential
+ * batch runner's automation (SequentialLoginScreen.kt / LoginAutomation.kt)
+ * was fixed to handle uptodate.com's real two-step flow (username +
+ * Continue, then a separate password + Sign In step, with an occasional
+ * "complete your profile" popup dismissed via "Ask Again Tomorrow"), the
+ * same fully-automated flow was asked for here too. This screen now shares
+ * that exact automation core (see LoginAutomation.kt) instead of its own
+ * fill-only script -- it fills AND submits both steps unattended, the same
+ * way the batch runner does for each credential.
+ *
+ * The WebView stays fully interactive throughout: if something the
+ * automation can't handle shows up (a CAPTCHA, a 2FA prompt), the admin
+ * can just take over by hand right where it stopped -- this screen never
+ * disables the page or blocks touches while it works. A status banner at
+ * the top shows what's happening / what happened; the toolbar's Refresh
+ * icon reloads the page and starts the automation over from scratch using
+ * the same in-memory credential (no need to go back and re-pick it).
  */
 @SuppressLint("SetJavaScriptEnabled")
 @OptIn(ExperimentalMaterial3Api::class)
@@ -97,13 +66,40 @@ fun UpToDateLoginScreen(onBack: () -> Unit) {
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var canGoBack by remember { mutableStateOf(false) }
     var isPageLoading by remember { mutableStateOf(true) }
-    // Consumed once, up front -- a later manual "Refresh"/re-navigation
-    // reuses this same in-memory copy so the admin doesn't have to go back
-    // to the picker just to re-trigger the fill.
+    var statusText by remember { mutableStateOf("Loading login page...") }
+    var outcome by remember { mutableStateOf<LoginAttemptOutcome?>(null) }
+    var resolved by remember { mutableStateOf(false) }
+    // Bumping this restarts the whole automated attempt (fresh cookies,
+    // fresh WebView, fresh timeout) -- used by the toolbar's Refresh icon,
+    // and reuses the SAME in-memory credential rather than needing the
+    // admin to go back and re-pick it.
+    var attemptGeneration by remember { mutableStateOf(0) }
+
+    // Consumed once, up front -- Refresh re-runs the automation with this
+    // same in-memory copy rather than re-consuming (which would already be
+    // empty the second time).
     val credential = remember { PendingUpToDateLogin.consume() }
+    val username = credential?.first
+    val password = credential?.second
+
+    fun resolveOnce(result: LoginAttemptOutcome) {
+        if (!resolved) {
+            resolved = true
+            outcome = result
+        }
+    }
 
     BackHandler(enabled = canGoBack) {
         webViewRef?.let { if (it.canGoBack()) it.goBack() }
+    }
+
+    LaunchedEffect(attemptGeneration) {
+        if (username.isNullOrBlank() || password.isNullOrBlank()) {
+            resolveOnce(LoginAttemptOutcome.Skipped)
+            return@LaunchedEffect
+        }
+        delay(ATTEMPT_TIMEOUT_MS)
+        resolveOnce(LoginAttemptOutcome.TimedOut)
     }
 
     Scaffold(
@@ -117,70 +113,129 @@ fun UpToDateLoginScreen(onBack: () -> Unit) {
                 },
                 actions = {
                     IconButton(onClick = {
-                        credential?.let { (u, p) ->
-                            webViewRef?.evaluateJavascript(autofillScript(u, p), null)
-                        }
+                        resolved = false
+                        outcome = null
+                        statusText = "Restarting..."
+                        attemptGeneration++
                     }) {
-                        Icon(Icons.Filled.Refresh, contentDescription = "Re-fill")
+                        Icon(Icons.Filled.Refresh, contentDescription = "Restart login")
                     }
                 }
             )
         }
     ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { ctx ->
-                    WebView(ctx).apply {
-                        layoutParams = ViewGroup.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.MATCH_PARENT
-                        )
-                        settings.javaScriptEnabled = true
-                        settings.domStorageEnabled = true
-                        settings.useWideViewPort = true
-                        settings.loadWithOverviewMode = true
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            val currentOutcome = outcome
+            if (currentOutcome != null || username.isNullOrBlank() || password.isNullOrBlank()) {
+                val (label, isError) = when (currentOutcome) {
+                    is LoginAttemptOutcome.Success -> "Logged in successfully" to false
+                    is LoginAttemptOutcome.Failed -> "Login failed -- ${currentOutcome.reason}" to true
+                    is LoginAttemptOutcome.TimedOut -> "No clear result in time -- check the page below" to true
+                    is LoginAttemptOutcome.Skipped -> "This credential has no username/password on file" to true
+                    null -> "This credential has no username/password on file" to true
+                }
+                Surface(
+                    color = if (isError) MaterialTheme.colorScheme.errorContainer
+                    else MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Text(
+                        label,
+                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                        color = if (isError) MaterialTheme.colorScheme.onErrorContainer
+                        else MaterialTheme.colorScheme.onPrimaryContainer,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            } else {
+                Surface(tonalElevation = 2.dp) {
+                    Text(
+                        statusText,
+                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
 
-                        CookieManager.getInstance().setAcceptCookie(true)
-                        CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+            Box(modifier = Modifier.fillMaxSize()) {
+                if (!username.isNullOrBlank() && !password.isNullOrBlank()) {
+                    key(attemptGeneration) {
+                        AndroidView(
+                            modifier = Modifier.fillMaxSize(),
+                            factory = { ctx ->
+                                var loopStarted = false
 
-                        webViewClient = object : WebViewClient() {
-                            override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
-                                super.onPageStarted(view, url, favicon)
-                                isPageLoading = true
-                            }
+                                fun scheduleInspect(view: WebView) {
+                                    view.postDelayed({
+                                        if (resolved) return@postDelayed
+                                        view.evaluateJavascript(inspectAndActScript(username, password)) { raw ->
+                                            if (resolved) return@evaluateJavascript
+                                            val result = interpretInspectResult(raw)
+                                            if (result.status == "final") {
+                                                resolveOnce(outcomeFromFinal(result))
+                                            } else {
+                                                statusText = statusLabelFor(result.status)
+                                                scheduleInspect(view)
+                                            }
+                                        }
+                                    }, INSPECT_INTERVAL_MS)
+                                }
 
-                            override fun onPageFinished(view: WebView, url: String?) {
-                                super.onPageFinished(view, url)
-                                isPageLoading = false
-                                canGoBack = view.canGoBack()
-                                // Runs on EVERY page load inside this screen
-                                // (initial login page, and any step/redirect
-                                // after it) -- autofillScript only fills
-                                // whatever field(s) actually exist on the
-                                // page currently showing, so a multi-step
-                                // login flow gets each step filled as it
-                                // appears. A second delayed attempt covers
-                                // pages that render their form fields in via
-                                // JS slightly after the page "finishes".
-                                credential?.let { (u, p) ->
-                                    val script = autofillScript(u, p)
-                                    view.evaluateJavascript(script, null)
-                                    view.postDelayed({ view.evaluateJavascript(script, null) }, 800)
+                                WebView(ctx).apply {
+                                    layoutParams = ViewGroup.LayoutParams(
+                                        ViewGroup.LayoutParams.MATCH_PARENT,
+                                        ViewGroup.LayoutParams.MATCH_PARENT
+                                    )
+                                    settings.javaScriptEnabled = true
+                                    settings.domStorageEnabled = true
+                                    settings.useWideViewPort = true
+                                    settings.loadWithOverviewMode = true
+
+                                    CookieManager.getInstance().setAcceptCookie(true)
+                                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+
+                                    webViewClient = object : WebViewClient() {
+                                        override fun onPageStarted(
+                                            view: WebView,
+                                            url: String?,
+                                            favicon: android.graphics.Bitmap?
+                                        ) {
+                                            super.onPageStarted(view, url, favicon)
+                                            isPageLoading = true
+                                        }
+
+                                        override fun onPageFinished(view: WebView, url: String?) {
+                                            super.onPageFinished(view, url)
+                                            isPageLoading = false
+                                            canGoBack = view.canGoBack()
+                                            // Only kick the automation loop
+                                            // off once per attempt -- if
+                                            // uptodate.com navigates again
+                                            // mid-flow (the real step-2
+                                            // page), the already-running
+                                            // loop notices on its own next
+                                            // tick instead of a second loop
+                                            // starting alongside it.
+                                            if (!loopStarted) {
+                                                loopStarted = true
+                                                statusText = "Working through login steps..."
+                                                scheduleInspect(view)
+                                            }
+                                        }
+                                    }
+
+                                    loadUrl(UPTODATE_LOGIN_URL)
+                                    webViewRef = this
                                 }
                             }
-                        }
-
-                        loadUrl(UPTODATE_LOGIN_URL)
-                        webViewRef = this
+                        )
                     }
                 }
-            )
-            if (isPageLoading) {
-                // Box's default child alignment is top-start, so a plain
-                // fillMaxWidth() bar here pins to the top edge, matching
-                // FullSiteScreen's own loading-bar placement.
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                if (isPageLoading) {
+                    // Box's default child alignment is top-start, so a
+                    // plain fillMaxWidth() bar here pins to the top edge.
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
             }
         }
     }
