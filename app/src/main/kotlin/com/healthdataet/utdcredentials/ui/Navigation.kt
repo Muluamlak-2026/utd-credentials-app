@@ -54,18 +54,30 @@ private const val LOCK_GRACE_PERIOD_MS = 3 * 60 * 1000L
  * is re-armed every time the app returns from the background (whatever
  * screen was showing before) -- not on every single ON_STOP any more
  * (round 47b), but only once the app has actually been away for at least
- * [LOCK_GRACE_PERIOD_MS]. [backgroundedAt] records when it left; ON_START
- * (coming back to the foreground) is what decides whether that gap was
- * long enough to reset [unlocked] to false. Cold start is unaffected --
- * [unlocked] still starts false whenever a lock method is configured.
+ * [LOCK_GRACE_PERIOD_MS].
+ *
+ * Round 48: [AppLockPrefs.lastBackgroundedAt] (persisted to disk) is what
+ * actually records when the app left, not an in-memory Compose var -- many
+ * phones' battery managers kill the whole process within seconds of it
+ * being backgrounded, not just stop the Activity. An in-memory timestamp
+ * is wiped out by that kill, so the very next launch had no way to know
+ * any time had passed at all and always re-locked instantly regardless of
+ * how briefly the app was actually away -- which is exactly the "locks
+ * immediately every time" symptom this persisted version fixes. [unlocked]'s
+ * OWN initial value is computed from that persisted timestamp too, so a
+ * fresh process (after a kill) that's still within the grace window comes
+ * back up already unlocked instead of re-showing the lock screen.
  */
 @Composable
 fun AppNavHost() {
     val context = LocalContext.current
     val session = remember { SessionManager(context) }
     val lockPrefs = remember { AppLockPrefs(context) }
-    var unlocked by remember { mutableStateOf(!lockPrefs.isLockEnabled) }
-    var backgroundedAt by remember { mutableStateOf(0L) }
+    var unlocked by remember {
+        val withinGrace = lockPrefs.lastBackgroundedAt != 0L &&
+            (System.currentTimeMillis() - lockPrefs.lastBackgroundedAt) < LOCK_GRACE_PERIOD_MS
+        mutableStateOf(!lockPrefs.isLockEnabled || withinGrace)
+    }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -73,16 +85,17 @@ fun AppNavHost() {
             when (event) {
                 Lifecycle.Event.ON_STOP -> {
                     if (lockPrefs.isLockEnabled) {
-                        backgroundedAt = System.currentTimeMillis()
+                        lockPrefs.lastBackgroundedAt = System.currentTimeMillis()
                     }
                 }
                 Lifecycle.Event.ON_START -> {
-                    if (lockPrefs.isLockEnabled && backgroundedAt != 0L) {
-                        val awayMs = System.currentTimeMillis() - backgroundedAt
+                    val lastBg = lockPrefs.lastBackgroundedAt
+                    if (lockPrefs.isLockEnabled && lastBg != 0L) {
+                        val awayMs = System.currentTimeMillis() - lastBg
                         if (awayMs >= LOCK_GRACE_PERIOD_MS) {
                             unlocked = false
                         }
-                        backgroundedAt = 0L
+                        lockPrefs.lastBackgroundedAt = 0L
                     }
                 }
                 else -> {}

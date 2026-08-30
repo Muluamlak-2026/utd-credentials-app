@@ -1,15 +1,22 @@
 package com.healthdataet.utdcredentials.ui.screens
 
 import android.annotation.SuppressLint
+import android.app.DownloadManager
+import android.net.Uri
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.URLUtil
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -99,6 +106,22 @@ fun FullSiteScreen(
     // far the page load has gotten, not just a generic spinner.
     var isPageLoading by remember { mutableStateOf(true) }
     var loadProgress by remember { mutableStateOf(0f) }
+
+    // Round 48: the WebView never had a file-picker wired up at all --
+    // every "Choose Files" input on the site (message attachments, bulk
+    // import) silently did nothing when tapped, because Android's WebView
+    // needs WebChromeClient.onShowFileChooser explicitly implemented to
+    // even show a picker; without it there's no crash, no error, just
+    // nothing happening, which is exactly the "silent" symptom. This
+    // launcher is what onShowFileChooser below hands off to, and its
+    // result is what completes the pending file-input callback.
+    var pendingFileChooserCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
+    val fileChooserLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetMultipleContents()
+    ) { uris: List<Uri> ->
+        pendingFileChooserCallback?.onReceiveValue(uris.toTypedArray())
+        pendingFileChooserCallback = null
+    }
 
     BackHandler(enabled = canGoBack) {
         webViewRef?.let { if (it.canGoBack()) it.goBack() }
@@ -271,6 +294,33 @@ fun FullSiteScreen(
                             super.onProgressChanged(view, newProgress)
                             loadProgress = newProgress / 100f
                         }
+
+                        // Round 48: without this override, tapping any
+                        // "Choose Files" input on the site does nothing at
+                        // all -- no error, just silence, because Android's
+                        // WebView requires this exact callback to launch a
+                        // picker for an HTML file input. Any previously
+                        // pending callback is released with null first
+                        // (Android's own documented requirement) so a
+                        // second file input tapped before the first
+                        // finishes can never leak or hang either request.
+                        override fun onShowFileChooser(
+                            webView: WebView?,
+                            filePathCallback: ValueCallback<Array<Uri>>,
+                            fileChooserParams: FileChooserParams?
+                        ): Boolean {
+                            pendingFileChooserCallback?.onReceiveValue(null)
+                            pendingFileChooserCallback = filePathCallback
+                            return try {
+                                val acceptTypes = fileChooserParams?.acceptTypes?.filter { it.isNotBlank() }
+                                val mimeType = if (acceptTypes?.size == 1) acceptTypes[0] else "*/*"
+                                fileChooserLauncher.launch(mimeType)
+                                true
+                            } catch (e: Exception) {
+                                pendingFileChooserCallback = null
+                                false
+                            }
+                        }
                     }
                     webViewClient = object : WebViewClient() {
                         override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
@@ -337,6 +387,35 @@ fun FullSiteScreen(
                             }
                         }
                     }
+
+                    // Round 48: Export buttons (Users/Credentials/etc.) on
+                    // the site trigger a normal browser-style file download
+                    // -- a WebView never handles those on its own without
+                    // this listener, so tapping Export previously did
+                    // nothing at all. Handed off to the system's own
+                    // Download Manager, with the site's session cookie
+                    // attached (the export routes are login-protected), so
+                    // the file lands in the phone's real Downloads folder
+                    // with a normal "download complete" notification.
+                    setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
+                        try {
+                            val request = DownloadManager.Request(Uri.parse(url))
+                            CookieManager.getInstance().getCookie(url)?.let {
+                                request.addRequestHeader("Cookie", it)
+                            }
+                            request.addRequestHeader("User-Agent", userAgent)
+                            val fileName = URLUtil.guessFileName(url, contentDisposition, mimeType)
+                            request.setMimeType(mimeType)
+                            request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                            request.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, fileName)
+                            val downloadManager = context.getSystemService(DownloadManager::class.java)
+                            downloadManager?.enqueue(request)
+                            Toast.makeText(context, "Downloading $fileName…", Toast.LENGTH_SHORT).show()
+                        } catch (e: Exception) {
+                            Toast.makeText(context, "Couldn't start the download", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+
                     loadUrl(session.baseUrl + "/admin/login")
                     webViewRef = this
                 }

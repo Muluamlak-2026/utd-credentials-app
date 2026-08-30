@@ -45,6 +45,22 @@ class AppLockPrefs(context: Context) {
     val isLockEnabled: Boolean
         get() = lockMethod != METHOD_NONE
 
+    /** Round 48: when the app was last backgrounded (epoch millis), persisted
+     * to disk rather than kept only in Compose state -- many phones (battery
+     * optimization / "aggressive" OEM app management) kill the whole app
+     * process seconds after it's backgrounded, not just stop the Activity.
+     * An in-memory-only timestamp is wiped out by that kill, which made the
+     * 3-minute grace period (see ui/Navigation.kt) silently do nothing on
+     * exactly those phones -- it would always look like the app had "just"
+     * been foregrounded with no away-time on record, so it locked every
+     * time regardless of how long it was actually away. Persisting it here
+     * survives a full process restart, so the very first Composition after
+     * a kill can still see how long ago the app left. 0L means "not
+     * currently backgrounded / no record yet".*/
+    var lastBackgroundedAt: Long
+        get() = prefs.getLong(KEY_LAST_BACKGROUNDED_AT, 0L)
+        set(value) = prefs.edit().putLong(KEY_LAST_BACKGROUNDED_AT, value).apply()
+
     var biometricEnabled: Boolean
         get() = prefs.getBoolean(KEY_BIOMETRIC, false) && isLockEnabled
         set(value) = prefs.edit().putBoolean(KEY_BIOMETRIC, value && isLockEnabled).apply()
@@ -118,5 +134,6 @@ class AppLockPrefs(context: Context) {
         private const val KEY_PIN_SALT = "pin_salt"
         private const val KEY_PATTERN_HASH = "pattern_hash"
         private const val KEY_PATTERN_SALT = "pattern_salt"
+        private const val KEY_LAST_BACKGROUNDED_AT = "last_backgrounded_at"
     }
 }

@@ -7,6 +7,20 @@
     <!-- Round 32: app-lock's fingerprint option (BiometricPrompt). Normal
          protection level, granted automatically, no runtime prompt. -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <!-- Round 48: Export buttons hand off to DownloadManager, which on
+         Android 9 (API 28) and below needs this permission to write into
+         the public Downloads folder (granted automatically, since it's
+         capped to those old versions); Android 10+ (API 29+, this app's
+         actual likely floor in practice) doesn't need it for that at all. -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+    <!-- Round 48c: lets MainActivity prompt the system's own "allow this
+         app to ignore battery optimizations" dialog, which addresses both
+         the app-lock and notification-delivery reliability issues on
+         phones with aggressive background app killing. A normal
+         permission, granted automatically at install; it's the ACTUAL
+         exemption that still requires the user to tap Allow on the dialog
+         shown at runtime. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:name=".UtdCredentialsApp"
@@ -29,7 +43,7 @@
         </activity>
 
         <!-- CrashHandler's recovery screen: launched from a global
-             uncaught-exception handler, so it must be its own task and
+             uncaught exception handler, so it must be its own task and
              never require the app to already be in a working state. -->
         <activity
             android:name=".CrashReportActivity"

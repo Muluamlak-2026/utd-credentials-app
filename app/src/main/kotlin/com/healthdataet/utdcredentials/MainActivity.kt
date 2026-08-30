@@ -1,8 +1,13 @@
 package com.healthdataet.utdcredentials
 
 import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -65,6 +70,32 @@ class MainActivity : FragmentActivity() {
                 // case without the permission is push notifications don't
                 // show, which is infinitely better than the app not opening.
             }
+        }
+
+        // Round 48c: proactively ask to be exempted from battery
+        // optimization -- on many phones (aggressive OEM battery/RAM
+        // managers especially), NOT being exempted is exactly what kills
+        // this app's whole process seconds after it's backgrounded (the
+        // same underlying restriction behind the app-lock "locks
+        // immediately" symptom -- see AppLockPrefs.lastBackgroundedAt) and
+        // what delays or silently drops push notifications and the
+        // ~15-minute background poll below. Shows the system's own
+        // permission dialog; if denied, everything still works, just less
+        // reliably in the background. Only asks again on a later launch
+        // if it's still not exempted -- once granted, isIgnoringBatteryOptimizations
+        // is true forever and this whole block is skipped.
+        try {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+            if (powerManager != null && !powerManager.isIgnoringBatteryOptimizations(packageName)) {
+                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = Uri.parse("package:$packageName")
+                }
+                startActivity(intent)
+            }
+        } catch (e: Exception) {
+            // Not every OEM honors this the same way -- never worth
+            // crashing over; the app just stays less reliable in the
+            // background without it.
         }
 
         // Create the 5 per-category channels (registration / trial start /
