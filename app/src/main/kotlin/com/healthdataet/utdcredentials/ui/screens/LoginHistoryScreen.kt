@@ -13,9 +13,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.DeleteOutline
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -24,6 +21,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -105,12 +103,13 @@ fun LoginHistoryScreen(onBack: () -> Unit) {
                 },
                 actions = {
                     if (allEntries.isNotEmpty()) {
-                        IconButton(onClick = {
+                        // Icons.Filled.DeleteOutline is only in the
+                        // material-icons-extended artifact, not a project
+                        // dependency here -- a text action avoids adding it.
+                        TextButton(onClick = {
                             LoginHistoryStore.clear(context)
                             allEntries = emptyList()
-                        }) {
-                            Icon(Icons.Filled.DeleteOutline, contentDescription = "Clear history")
-                        }
+                        }) { Text("Clear") }
                     }
                 }
             )
@@ -162,9 +161,12 @@ fun LoginHistoryScreen(onBack: () -> Unit) {
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                            Icon(
-                                if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                                contentDescription = if (expanded) "Collapse" else "Expand"
+                            // Icons.Filled.ExpandLess/ExpandMore are only in
+                            // material-icons-extended -- a plain glyph
+                            // avoids adding that dependency for this.
+                            Text(
+                                if (expanded) "▲" else "▼",
+                                style = MaterialTheme.typography.labelSmall
                             )
                         }
                         if (expanded) {

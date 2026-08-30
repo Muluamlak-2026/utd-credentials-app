@@ -287,8 +287,15 @@ android {
         // website's Sign-In Test column. (4) Credential picker now pages
         // through the pool 200-at-a-time ("Load next 200") instead of
         // always hard-capping at the first 200.
-        versionCode = 24
-        versionName = "1.4.18"
+        // Round 48l hotfix: build 24 failed to compile -- History,
+        // DeleteOutline, ExpandLess, ExpandMore all come from the
+        // material-icons-EXTENDED artifact, which this project doesn't
+        // depend on (only the small material-icons-core set, which is all
+        // ArrowBack/Refresh/etc used elsewhere actually needed). Replaced
+        // all four with plain text glyphs/labels instead of adding that
+        // dependency.
+        versionCode = 25
+        versionName = "1.4.19"
         buildConfigField("String", "GIT_SHA", "\"${gitShaForBuild()}\"")
     }
 

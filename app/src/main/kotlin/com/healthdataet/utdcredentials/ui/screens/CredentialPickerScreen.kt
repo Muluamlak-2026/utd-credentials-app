@@ -14,7 +14,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
@@ -174,9 +173,10 @@ fun CredentialPickerScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = onOpenHistory) {
-                        Icon(Icons.Filled.History, contentDescription = "Login history")
-                    }
+                    // Icons.Filled.History is only in the material-icons-extended
+                    // artifact, which this project doesn't depend on -- a plain
+                    // text glyph avoids adding that dependency for one icon.
+                    TextButton(onClick = onOpenHistory) { Text("History") }
                 }
             )
         },
