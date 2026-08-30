@@ -29,11 +29,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.healthdataet.utdcredentials.data.PendingUpToDateLogin
+import com.healthdataet.utdcredentials.data.SessionManager
 import kotlinx.coroutines.delay
 
 /**
@@ -63,13 +65,14 @@ import kotlinx.coroutines.delay
 @SuppressLint("SetJavaScriptEnabled")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun UpToDateLoginScreen(onBack: () -> Unit) {
+fun UpToDateLoginScreen(session: SessionManager, onBack: () -> Unit) {
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var canGoBack by remember { mutableStateOf(false) }
     var isPageLoading by remember { mutableStateOf(true) }
     var statusText by remember { mutableStateOf("Loading login page...") }
     var outcome by remember { mutableStateOf<LoginAttemptOutcome?>(null) }
     var resolved by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     // Bumping this restarts the whole automated attempt (fresh cookies,
     // fresh WebView, fresh timeout) -- used by the toolbar's Refresh icon,
     // and reuses the SAME in-memory credential rather than needing the
@@ -78,8 +81,10 @@ fun UpToDateLoginScreen(onBack: () -> Unit) {
 
     // Consumed once, up front -- Refresh re-runs the automation with this
     // same in-memory copy rather than re-consuming (which would already be
-    // empty the second time).
+    // empty the second time). sourceId (Round 48k) is what lets resolveOnce
+    // report this attempt's outcome back to the Hub's "Sign-In Test" column.
     val credential = remember { PendingUpToDateLogin.consume() }
+    val sourceId = remember { PendingUpToDateLogin.consumeSourceId() }
     val username = credential?.first
     val password = credential?.second
 
@@ -87,6 +92,7 @@ fun UpToDateLoginScreen(onBack: () -> Unit) {
         if (!resolved) {
             resolved = true
             outcome = result
+            reportLoginOutcome(scope, session, sourceId, result)
         }
     }
 

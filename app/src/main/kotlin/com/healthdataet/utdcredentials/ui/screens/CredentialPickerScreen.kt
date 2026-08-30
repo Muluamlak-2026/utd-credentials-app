@@ -324,6 +324,8 @@ fun CredentialPickerScreen(
                                         if (!u.isNullOrBlank() && !p.isNullOrBlank()) {
                                             PendingUpToDateLogin.username = u
                                             PendingUpToDateLogin.password = p
+                                            PendingUpToDateLogin.source = cred.source
+                                            PendingUpToDateLogin.id = cred.id
                                             onCredentialChosen()
                                         } else {
                                             errorText = "This credential has no username/password on file."

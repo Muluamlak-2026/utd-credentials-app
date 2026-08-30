@@ -101,4 +101,22 @@ class ApiClient(private val baseUrl: String) {
         val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
         return getWithAuth("/api/v1/credentials/list?q=$encodedQuery", token)
     }
+
+    /** Round 48k: reports the result of one automated UpToDate sign-in
+     * attempt (single-credential screen, or one step of the sequential
+     * batch runner) back to the panel, so the Credentials Hub's "Sign-In
+     * Test" column can show when a credential was last tried and what
+     * happened -- [source]/[id] must be the exact pair the credential was
+     * handed with from listCredentials, never guessed. [status] is one of
+     * "success", "failed", "timeout", "skipped". Best-effort: a failure
+     * here (network hiccup, etc.) is never surfaced to the login flow --
+     * see the call sites, which fire-and-forget this. */
+    fun reportLoginAttempt(token: String, source: String, id: Long, status: String, reason: String?): ApiResult {
+        val body = JSONObject()
+            .put("source", source)
+            .put("id", id)
+            .put("status", status)
+        if (!reason.isNullOrBlank()) body.put("reason", reason)
+        return post("/api/v1/credentials/report-login-attempt", body, token)
+    }
 }

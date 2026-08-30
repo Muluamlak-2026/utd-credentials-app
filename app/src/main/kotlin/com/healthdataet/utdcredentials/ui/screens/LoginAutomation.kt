@@ -3,13 +3,23 @@ package com.healthdataet.utdcredentials.ui.screens
 import android.os.SystemClock
 import android.view.MotionEvent
 import android.webkit.WebView
+import com.healthdataet.utdcredentials.data.ApiClient
+import com.healthdataet.utdcredentials.data.SessionManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 const val UPTODATE_LOGIN_URL = "https://www.uptodate.com/login"
-const val ATTEMPT_TIMEOUT_MS = 45_000L
+const val ATTEMPT_TIMEOUT_MS = 55_000L
 const val INSPECT_INTERVAL_MS = 1200L
 const val SUBMIT_SETTLE_MS = 2500L
 const val TAP_SETTLE_MS = 1800L
+// How often to re-check while WATCHING for the keyboard-close reflow to
+// settle (isViewportStable() in the script) -- fast enough to notice the
+// instant it's actually done rather than trusting one blind fixed wait.
+const val SETTLE_POLL_MS = 350L
 
 fun inspectAndActScript(username: String, password: String): String {
     val escapedUser = username.replace("\\", "\\\\").replace("\"", "\\\"")
@@ -49,6 +59,30 @@ fun inspectAndActScript(username: String, password: String): String {
             function centerOf(el) {
                 var rect = el.getBoundingClientRect();
                 return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+            }
+
+            // Filling a field with .focus() opens the real on-screen
+            // keyboard, which resizes/reflows the whole page -- reading a
+            // button's position before that settles is what made earlier
+            // taps land on stale coordinates. Rather than trusting one
+            // fixed guess at how long that takes, this actually WATCHES
+            // the viewport: it keeps polling (fast, every ~350ms) until
+            // the visual viewport height hasn't changed for two polls in a
+            // row (the keyboard animation is genuinely done), and gives up
+            // waiting after 10 polls (~3.5s) so a page that never quite
+            // settles can't stall the whole attempt forever.
+            function isViewportStable() {
+                var h = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+                window.__utdSettlePolls = (window.__utdSettlePolls || 0) + 1;
+                if (window.__utdLastViewportH === h) {
+                    window.__utdViewportStableCount = (window.__utdViewportStableCount || 0) + 1;
+                } else {
+                    window.__utdViewportStableCount = 0;
+                    window.__utdLastViewportH = h;
+                }
+                if (window.__utdViewportStableCount >= 2) return true;
+                if (window.__utdSettlePolls >= 10) return true;
+                return false;
             }
 
             // A plain element.click() (and even a synthetic
@@ -99,12 +133,29 @@ fun inspectAndActScript(username: String, password: String): String {
             if (passFieldUsable) {
                 // The password field is on screen -- this is the final
                 // step, whether or not a username field is showing
-                // alongside it on the same page. A page-scoped flag (reset
-                // automatically on real navigation, since window is a fresh
-                // object then) guarantees the Sign In tap is only ever
-                // requested once per page, no matter how many polls run.
+                // alongside it on the same page.
+                var maxSignInAttempts = 2;
+                var signInAttempts = window.__utdSignInAttempts || 0;
                 if (window.__utdSignInTapRequested) {
-                    return JSON.stringify({status: 'waiting_password_result', url: window.location.href});
+                    // A tap was already sent. Verify it actually had an
+                    // effect before deciding what to do next: if Sign In
+                    // is no longer findable, the page is most likely
+                    // already navigating -- just wait for the result. If
+                    // it's STILL sitting right there, the previous tap
+                    // most likely never registered -- retry, up to
+                    // maxSignInAttempts total, rather than silently waiting
+                    // out the whole attempt timeout on a tap that never
+                    // landed.
+                    var stillThere = findButtonByText(['sign in', 'log in', 'submit']);
+                    if (!stillThere || signInAttempts >= maxSignInAttempts) {
+                        return JSON.stringify({status: 'waiting_password_result', url: window.location.href});
+                    }
+                    if (!isViewportStable()) {
+                        return JSON.stringify({status: 'settling_before_signin', url: window.location.href});
+                    }
+                    window.__utdSignInAttempts = signInAttempts + 1;
+                    var retryC = centerOf(stillThere);
+                    return JSON.stringify({status: 'need_tap_signin', url: window.location.href, x: retryC.x, y: retryC.y});
                 }
                 var userReady = !userField || !!userField.value;
                 if (userField && !userField.value) {
@@ -121,24 +172,19 @@ fun inspectAndActScript(username: String, password: String): String {
                     passField.dispatchEvent(new Event('change', { bubbles: true }));
                 }
                 if (userReady && passField.value === "$escapedPass") {
-                    // Filling a field with .focus() opens the soft
-                    // keyboard, which resizes/reflows the page -- if the
-                    // Sign In button's on-screen position is read before
-                    // that reflow settles, the coordinates handed to the
-                    // native tap can be stale by the time it actually
-                    // lands. Blur the field and wait one extra poll for
-                    // the keyboard-close reflow to finish before reading
-                    // the button's position for real.
                     if (!window.__utdPasswordBlurred) {
                         window.__utdPasswordBlurred = true;
                         if (document.activeElement && document.activeElement.blur) {
                             document.activeElement.blur();
                         }
+                    }
+                    if (!isViewportStable()) {
                         return JSON.stringify({status: 'settling_before_signin', url: window.location.href});
                     }
                     var signInBtn = findButtonByText(['sign in', 'log in', 'submit']);
                     if (signInBtn) {
                         window.__utdSignInTapRequested = true;
+                        window.__utdSignInAttempts = 1;
                         var c3 = centerOf(signInBtn);
                         return JSON.stringify({status: 'need_tap_signin', url: window.location.href, x: c3.x, y: c3.y});
                     }
@@ -160,29 +206,47 @@ fun inspectAndActScript(username: String, password: String): String {
                 return JSON.stringify({status: 'settling_before_continue', url: window.location.href});
             }
 
-            if (userField && userField.value === "$escapedUser" && !window.__utdContinueTapRequested) {
-                // Second poll after filling username: the keyboard-close
-                // reflow (see the password-step comment above) has had a
-                // chance to settle by now, so blur just in case it's still
-                // focused, then locate Continue fresh right before tapping.
+            if (userField && userField.value === "$escapedUser") {
+                var maxContinueAttempts = 2;
+                var continueAttempts = window.__utdContinueAttempts || 0;
+                if (window.__utdContinueTapRequested) {
+                    // Same verify-then-retry pattern as Sign In above: if
+                    // Continue is no longer findable, the page is likely
+                    // already moving on -- wait. If it's still right
+                    // there, the previous tap probably missed -- retry, up
+                    // to maxContinueAttempts.
+                    var continueStillThere = findButtonByText(['continue', 'next']);
+                    if (!continueStillThere || continueAttempts >= maxContinueAttempts) {
+                        return JSON.stringify({status: 'waiting_username_result', url: window.location.href});
+                    }
+                    if (!isViewportStable()) {
+                        return JSON.stringify({status: 'settling_before_continue', url: window.location.href});
+                    }
+                    window.__utdContinueAttempts = continueAttempts + 1;
+                    var retryC4 = centerOf(continueStillThere);
+                    return JSON.stringify({status: 'need_tap_continue', url: window.location.href, x: retryC4.x, y: retryC4.y});
+                }
+                // First time reaching this step: blur whatever's focused
+                // (closes the keyboard the .focus() fill just opened) and
+                // wait for the resulting reflow to genuinely settle before
+                // trusting Continue's on-screen position.
                 if (!window.__utdUsernameBlurred) {
                     window.__utdUsernameBlurred = true;
                     if (document.activeElement && document.activeElement.blur) {
                         document.activeElement.blur();
                     }
+                }
+                if (!isViewportStable()) {
                     return JSON.stringify({status: 'settling_before_continue', url: window.location.href});
                 }
                 var continueBtn = findButtonByText(['continue', 'next']);
                 if (continueBtn) {
                     window.__utdContinueTapRequested = true;
+                    window.__utdContinueAttempts = 1;
                     var c4 = centerOf(continueBtn);
                     return JSON.stringify({status: 'need_tap_continue', url: window.location.href, x: c4.x, y: c4.y});
                 }
                 return JSON.stringify({status: 'submitted_username', url: window.location.href});
-            }
-
-            if (userField && userField.value === "$escapedUser" && window.__utdContinueTapRequested) {
-                return JSON.stringify({status: 'waiting_username_result', url: window.location.href});
             }
 
             var bodyText = (document.body ? document.body.innerText : '').toLowerCase();
@@ -280,6 +344,44 @@ fun nativeTap(view: WebView, cssX: Double, cssY: Double) {
     upEvent.recycle()
 }
 
+/**
+ * Round 48k: fire-and-forget reports one attempt's outcome back to the
+ * panel (ApiClient.reportLoginAttempt) so the Credentials Hub's "Sign-In
+ * Test" column can show when this credential was last tried and what
+ * happened. Shared by both UpToDateLoginScreen and SequentialLoginScreen
+ * so the outcome-to-status/reason mapping can never drift between them.
+ * [sourceId] is the exact (source, id) pair the credential was handed with
+ * from /api/v1/credentials/list -- null skips reporting entirely (nothing
+ * to key the result against). Never surfaces a failure back to the caller:
+ * a network hiccup here must never affect the login flow itself, only the
+ * Hub's visibility into it.
+ */
+fun reportLoginOutcome(
+    scope: CoroutineScope,
+    session: SessionManager,
+    sourceId: Pair<String, Long>?,
+    outcome: LoginAttemptOutcome
+) {
+    val token = session.apiToken ?: return
+    val (source, id) = sourceId ?: return
+    val (status, reason) = when (outcome) {
+        is LoginAttemptOutcome.Success -> "success" to null
+        is LoginAttemptOutcome.Failed -> "failed" to outcome.reason
+        is LoginAttemptOutcome.TimedOut -> "timeout" to "No clear result within the attempt timeout"
+        is LoginAttemptOutcome.Skipped -> "skipped" to null
+    }
+    scope.launch {
+        withContext(Dispatchers.IO) {
+            try {
+                ApiClient(session.baseUrl).reportLoginAttempt(token, source, id, status, reason)
+            } catch (e: Exception) {
+                // Best-effort telemetry only -- never let this affect the
+                // login flow itself.
+            }
+        }
+    }
+}
+
 fun startLoginAutomation(
     view: WebView,
     username: String,
@@ -319,7 +421,7 @@ fun startLoginAutomation(
                     } else {
                         val nextDelay = when (result.status) {
                             "submitted_username" -> SUBMIT_SETTLE_MS
-                            "settling_before_continue", "settling_before_signin" -> TAP_SETTLE_MS
+                            "settling_before_continue", "settling_before_signin" -> SETTLE_POLL_MS
                             else -> INSPECT_INTERVAL_MS
                         }
                         poll(nextDelay)

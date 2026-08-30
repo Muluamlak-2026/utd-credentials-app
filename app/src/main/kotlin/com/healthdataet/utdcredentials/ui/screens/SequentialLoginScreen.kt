@@ -32,11 +32,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.healthdataet.utdcredentials.data.PendingSequentialLogins
+import com.healthdataet.utdcredentials.data.SessionManager
 import kotlinx.coroutines.delay
 
 // UPTODATE_LOGIN_URL, ATTEMPT_TIMEOUT_MS, INSPECT_INTERVAL_MS,
@@ -209,12 +211,13 @@ private fun ResultRow(result: LoginAttemptResult) {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SequentialLoginScreen(onBack: () -> Unit) {
+fun SequentialLoginScreen(session: SessionManager, onBack: () -> Unit) {
     val queue = remember { PendingSequentialLogins.consume().orEmpty() }
     var results by remember { mutableStateOf(listOf<LoginAttemptResult>()) }
     var currentIndex by remember { mutableStateOf(0) }
     var statusText by remember { mutableStateOf("Starting...") }
     var stopRequested by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     val finished = queue.isEmpty() || currentIndex >= queue.size || stopRequested
     val successCount = results.count { it.outcome is LoginAttemptOutcome.Success }
@@ -285,7 +288,9 @@ fun SequentialLoginScreen(onBack: () -> Unit) {
                                 credential = queue[currentIndex],
                                 onStatusChange = { statusText = it },
                                 onDone = { outcome ->
-                                    results = results + LoginAttemptResult(queue[currentIndex], outcome)
+                                    val cred = queue[currentIndex]
+                                    results = results + LoginAttemptResult(cred, outcome)
+                                    reportLoginOutcome(scope, session, Pair(cred.source, cred.id), outcome)
                                     currentIndex += 1
                                 }
                             )

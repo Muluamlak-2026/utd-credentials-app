@@ -247,8 +247,33 @@ android {
         // button's position, for both Continue and Sign In.
         // ATTEMPT_TIMEOUT_MS bumped 40s -> 45s to give the extra settle
         // step room.
-        versionCode = 22
-        versionName = "1.4.16"
+        // Round 48k: two changes in one build, per explicit user request
+        // (keep hotfix 9's approach, make it more reliable, AND add
+        // Sign-In Test tracking):
+        // (1) Click reliability, still on the same native-tap approach
+        // (preserved, not replaced): the fixed "wait ~1.8s and hope the
+        // keyboard finished" guess is replaced with isViewportStable() --
+        // an actual watch on window.visualViewport.height, polled every
+        // ~350ms, that only proceeds once the height has been unchanged
+        // for 2 consecutive checks (capped at ~3.5s so a page that never
+        // quite settles can't stall forever). On top of that, both
+        // Continue and Sign In now verify their own tap: if the same
+        // button is still sitting there on the next poll, the previous tap
+        // is treated as missed and retried (up to 2 attempts total) rather
+        // than silently waiting out the whole attempt timeout on a tap
+        // that never registered. ATTEMPT_TIMEOUT_MS bumped 45s -> 55s for
+        // the added retry headroom.
+        // (2) New: every automated sign-in attempt (single-credential
+        // screen AND each step of the sequential batch) now reports its
+        // outcome back to the panel via the new
+        // /api/v1/credentials/report-login-attempt endpoint, so the
+        // Credentials Hub table's new "Sign-In Test" column shows when a
+        // credential was last tried and what happened -- success, failed/
+        // timed-out with the reason, skipped, incomplete-credentials, or
+        // untested/not-tried-yet. Fire-and-forget: any problem reporting
+        // this never affects the login flow itself.
+        versionCode = 23
+        versionName = "1.4.17"
         buildConfigField("String", "GIT_SHA", "\"${gitShaForBuild()}\"")
     }
 

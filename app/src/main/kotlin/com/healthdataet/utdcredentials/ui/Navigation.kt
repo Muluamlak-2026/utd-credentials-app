@@ -174,10 +174,10 @@ fun AppNavHost() {
             )
         }
         composable(ROUTE_UPTODATE_LOGIN) {
-            UpToDateLoginScreen(onBack = { navController.popBackStack() })
+            UpToDateLoginScreen(session = session, onBack = { navController.popBackStack() })
         }
         composable(ROUTE_SEQUENTIAL_LOGIN) {
-            SequentialLoginScreen(onBack = { navController.popBackStack() })
+            SequentialLoginScreen(session = session, onBack = { navController.popBackStack() })
         }
     }
 }
