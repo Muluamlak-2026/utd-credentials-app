@@ -1,5 +1,6 @@
 package com.healthdataet.utdcredentials.ui.screens
 
+import android.webkit.WebView
 import org.json.JSONObject
 
 /**
@@ -26,9 +27,10 @@ const val UPTODATE_LOGIN_URL = "https://www.uptodate.com/login"
 // signal), so a hard ceiling keeps a stuck attempt from hanging forever
 // (and, in the batch runner, from blocking every credential behind it).
 // The real login needs room for two round trips (username step, then
-// password step) plus the occasional profile popup, hence 35s rather than
-// the original single-step assumption's 25s.
-const val ATTEMPT_TIMEOUT_MS = 35_000L
+// password step) plus the occasional profile popup and the settle/debounce
+// delays below, hence 40s rather than the original single-step
+// assumption's 25s.
+const val ATTEMPT_TIMEOUT_MS = 40_000L
 
 // How often the inspect-and-act script re-checks the page. Deliberately a
 // tight poll rather than a single one-shot check after submit:
@@ -38,6 +40,17 @@ const val ATTEMPT_TIMEOUT_MS = 35_000L
 // keeps looking on a timer instead of waiting for a page-load event that
 // might never come a second time.
 const val INSPECT_INTERVAL_MS = 1200L
+
+// After clicking Continue or Sign In, the real page needs a moment to
+// actually navigate/re-render before the next check means anything -- a
+// shorter interval here was exactly what caused the "still on the login
+// page" reports to fire falsely early: the very next poll after clicking
+// Continue could still see the OLD (username-only) page for a moment,
+// with no password field yet and the username field still holding the
+// value we set, which looked identical to "nothing left to fill" and got
+// reported as a final failure before the real navigation had even
+// happened.
+const val SUBMIT_SETTLE_MS = 2500L
 
 /**
  * Called repeatedly (see INSPECT_INTERVAL_MS) and, each time, looks at
@@ -67,7 +80,36 @@ fun inspectAndActScript(username: String, password: String): String {
                 var rect = el.getBoundingClientRect();
                 return !!(rect.width || rect.height) && el.offsetParent !== null;
             }
-            function clickSubmitNear(el) {
+
+            // Finds the real Continue/Sign In button by its VISIBLE TEXT
+            // rather than assuming it carries a type="submit" attribute --
+            // that assumption was the actual bug: this page's Continue/
+            // Sign In buttons don't necessarily expose that attribute (a
+            // lot of modern login pages handle the click with their own
+            // JS instead of a native form submit), so a selector looking
+            // only for type="submit" could silently find nothing, leave
+            // the button unclicked, and the page would just sit there
+            // unchanged -- which looked identical to "nothing left to do"
+            // and got wrongly reported as a final failure.
+            function findButtonByText(labels) {
+                var candidates = document.querySelectorAll(
+                    'button, a, input[type="button"], input[type="submit"], [role="button"]'
+                );
+                for (var i = 0; i < candidates.length; i++) {
+                    var el = candidates[i];
+                    if (!visible(el)) continue;
+                    var t = (el.innerText || el.value || el.getAttribute('aria-label') || '')
+                        .trim().toLowerCase();
+                    for (var j = 0; j < labels.length; j++) {
+                        if (t.indexOf(labels[j]) !== -1) { return el; }
+                    }
+                }
+                return null;
+            }
+
+            function clickSubmit(el, labels) {
+                var byText = findButtonByText(labels);
+                if (byText) { byText.click(); return; }
                 var btn = document.querySelector('button[type="submit"], input[type="submit"]');
                 if (btn && visible(btn)) { btn.click(); return; }
                 var form = el ? el.form : null;
@@ -79,13 +121,10 @@ fun inspectAndActScript(username: String, password: String): String {
 
             // Step: the "Please complete your profile" popup some
             // credentials show mid-flow -- just dismiss it and keep going.
-            var allClickable = document.querySelectorAll('button, a, input[type="button"]');
-            for (var k = 0; k < allClickable.length; k++) {
-                var t = (allClickable[k].innerText || allClickable[k].value || '').trim();
-                if (t.indexOf('Ask Again Tomorrow') !== -1 && visible(allClickable[k])) {
-                    allClickable[k].click();
-                    return JSON.stringify({status: 'dismissed_popup', url: window.location.href});
-                }
+            var askLater = findButtonByText(['ask again tomorrow']);
+            if (askLater) {
+                askLater.click();
+                return JSON.stringify({status: 'dismissed_popup', url: window.location.href});
             }
 
             // Step: password field visible -> this is the second step of
@@ -96,7 +135,7 @@ fun inspectAndActScript(username: String, password: String): String {
                 passField.value = "$escapedPass";
                 passField.dispatchEvent(new Event('input', { bubbles: true }));
                 passField.dispatchEvent(new Event('change', { bubbles: true }));
-                clickSubmitNear(passField);
+                clickSubmit(passField, ['sign in', 'log in', 'submit']);
                 return JSON.stringify({status: 'submitted_password', url: window.location.href});
             }
 
@@ -119,7 +158,7 @@ fun inspectAndActScript(username: String, password: String): String {
                 userField.value = "$escapedUser";
                 userField.dispatchEvent(new Event('input', { bubbles: true }));
                 userField.dispatchEvent(new Event('change', { bubbles: true }));
-                clickSubmitNear(userField);
+                clickSubmit(userField, ['continue', 'next']);
                 return JSON.stringify({status: 'submitted_username', url: window.location.href});
             }
 
@@ -187,4 +226,59 @@ fun statusLabelFor(status: String): String = when (status) {
     "submitted_password" -> "Password submitted, checking result..."
     "dismissed_popup" -> "Dismissed a profile-completion popup, continuing..."
     else -> "Working through login steps..."
+}
+
+/**
+ * The one shared polling driver used by both UpToDateLoginScreen (single
+ * credential) and SequentialLoginScreen (batch) -- call once per WebView,
+ * from its first onPageFinished. Repeatedly runs inspectAndActScript and:
+ *  - on "final", requires TWO consecutive final readings in a row before
+ *    trusting it (see FINAL_CONFIRMATIONS_NEEDED below) -- a single lone
+ *    "nothing left to fill" reading right after clicking Continue was
+ *    exactly what caused false "still on the login page" failures before
+ *    the real navigation had even finished;
+ *  - after a submitted_username/submitted_password action, waits the
+ *    longer SUBMIT_SETTLE_MS before checking again, giving the real page
+ *    time to actually navigate/re-render;
+ *  - otherwise polls at the tighter INSPECT_INTERVAL_MS cadence.
+ */
+fun startLoginAutomation(
+    view: WebView,
+    username: String,
+    password: String,
+    isResolved: () -> Boolean,
+    onStatus: (String) -> Unit,
+    onResolved: (LoginAttemptOutcome) -> Unit
+) {
+    val finalConfirmationsNeeded = 2
+    var consecutiveFinal = 0
+
+    fun poll(delayMs: Long) {
+        view.postDelayed({
+            if (isResolved()) return@postDelayed
+            view.evaluateJavascript(inspectAndActScript(username, password)) { raw ->
+                if (isResolved()) return@evaluateJavascript
+                val result = interpretInspectResult(raw)
+                if (result.status == "final") {
+                    consecutiveFinal++
+                    if (consecutiveFinal >= finalConfirmationsNeeded) {
+                        onResolved(outcomeFromFinal(result))
+                    } else {
+                        poll(INSPECT_INTERVAL_MS)
+                    }
+                } else {
+                    consecutiveFinal = 0
+                    onStatus(statusLabelFor(result.status))
+                    val nextDelay = if (result.status == "submitted_username" || result.status == "submitted_password") {
+                        SUBMIT_SETTLE_MS
+                    } else {
+                        INSPECT_INTERVAL_MS
+                    }
+                    poll(nextDelay)
+                }
+            }
+        }, delayMs)
+    }
+
+    poll(INSPECT_INTERVAL_MS)
 }

@@ -91,28 +91,6 @@ private fun LoginAttemptRunner(
         factory = { ctx ->
             var loopStarted = false
 
-            // Repeatedly inspects the page and acts on whatever step is
-            // currently showing (see inspectAndActScript's doc comment) --
-            // self-reschedules on a timer rather than waiting on
-            // onPageFinished a second time, since uptodate.com's own move
-            // from the username step to the password step doesn't
-            // necessarily fire a fresh page-load event.
-            fun scheduleInspect(view: WebView) {
-                view.postDelayed({
-                    if (resolved) return@postDelayed
-                    view.evaluateJavascript(inspectAndActScript(username, password)) { raw ->
-                        if (resolved) return@evaluateJavascript
-                        val result = interpretInspectResult(raw)
-                        if (result.status == "final") {
-                            resolveOnce(outcomeFromFinal(result))
-                        } else {
-                            onStatusChange(statusLabelFor(result.status))
-                            scheduleInspect(view)
-                        }
-                    }
-                }, INSPECT_INTERVAL_MS)
-            }
-
             WebView(ctx).apply {
                 layoutParams = ViewGroup.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
@@ -148,7 +126,14 @@ private fun LoginAttemptRunner(
                         if (!loopStarted) {
                             loopStarted = true
                             onStatusChange("Working through login steps...")
-                            scheduleInspect(view)
+                            startLoginAutomation(
+                                view = view,
+                                username = username,
+                                password = password,
+                                isResolved = { resolved },
+                                onStatus = onStatusChange,
+                                onResolved = { resolveOnce(it) }
+                            )
                         }
                     }
                 }

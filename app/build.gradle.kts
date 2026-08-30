@@ -156,8 +156,25 @@ android {
         // both steps unattended, the same as the batch runner does per
         // credential, while staying fully touchable so the admin can take
         // over by hand if something it can't handle (CAPTCHA/2FA) shows up.
-        versionCode = 15
-        versionName = "1.4.9"
+        // Round 48i hotfix 3: found the real reason password entry never
+        // happened even after hotfix 1/2 -- inspectAndActScript only ever
+        // looked for a button with the literal type="submit" attribute to
+        // click Continue/Sign In, but uptodate.com's real buttons don't
+        // necessarily carry that attribute (many modern login pages wire
+        // the click up with their own JS instead of a native form submit).
+        // So Continue never actually got clicked, the page just sat there
+        // unchanged, and the very next check saw "no field left to fill"
+        // and wrongly reported a final failure almost immediately -- which
+        // matches exactly what was seen ("fails early", password never
+        // reached). Fixed by finding the real button by its VISIBLE TEXT
+        // ("Continue" / "Sign In" / "Ask Again Tomorrow") instead of that
+        // attribute, plus two safety nets: a longer settle delay after
+        // clicking Continue/Sign In before the next check (the old check
+        // could fire before the real page had even finished navigating),
+        // and requiring two consecutive "nothing left to fill" readings
+        // before trusting a final failure instead of one.
+        versionCode = 16
+        versionName = "1.4.10"
         buildConfigField("String", "GIT_SHA", "\"${gitShaForBuild()}\"")
     }
 

@@ -165,22 +165,6 @@ fun UpToDateLoginScreen(onBack: () -> Unit) {
                             factory = { ctx ->
                                 var loopStarted = false
 
-                                fun scheduleInspect(view: WebView) {
-                                    view.postDelayed({
-                                        if (resolved) return@postDelayed
-                                        view.evaluateJavascript(inspectAndActScript(username, password)) { raw ->
-                                            if (resolved) return@evaluateJavascript
-                                            val result = interpretInspectResult(raw)
-                                            if (result.status == "final") {
-                                                resolveOnce(outcomeFromFinal(result))
-                                            } else {
-                                                statusText = statusLabelFor(result.status)
-                                                scheduleInspect(view)
-                                            }
-                                        }
-                                    }, INSPECT_INTERVAL_MS)
-                                }
-
                                 WebView(ctx).apply {
                                     layoutParams = ViewGroup.LayoutParams(
                                         ViewGroup.LayoutParams.MATCH_PARENT,
@@ -219,7 +203,14 @@ fun UpToDateLoginScreen(onBack: () -> Unit) {
                                             if (!loopStarted) {
                                                 loopStarted = true
                                                 statusText = "Working through login steps..."
-                                                scheduleInspect(view)
+                                                startLoginAutomation(
+                                                    view = view,
+                                                    username = username,
+                                                    password = password,
+                                                    isResolved = { resolved },
+                                                    onStatus = { statusText = it },
+                                                    onResolved = { resolveOnce(it) }
+                                                )
                                             }
                                         }
                                     }
