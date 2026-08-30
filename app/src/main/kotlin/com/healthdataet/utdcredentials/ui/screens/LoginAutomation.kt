@@ -43,16 +43,44 @@ fun inspectAndActScript(username: String, password: String): String {
                 return null;
             }
 
+            // Some frameworks (React and similar) wire their click handler
+            // to a real pointer/mouse gesture rather than reacting to the
+            // synthetic .click() DOM method alone -- a plain .click() can
+            // silently do nothing on those buttons even though the element
+            // was found correctly. Firing the full realistic event sequence
+            // (pointer down/up, mouse down/up, then click) covers both
+            // kinds of button.
+            function fireClick(el) {
+                if (!el) return false;
+                var rect = el.getBoundingClientRect();
+                var cx = rect.left + rect.width / 2;
+                var cy = rect.top + rect.height / 2;
+                var opts = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy };
+                try {
+                    el.dispatchEvent(new PointerEvent('pointerdown', opts));
+                } catch (e) {}
+                el.dispatchEvent(new MouseEvent('mousedown', opts));
+                try {
+                    el.dispatchEvent(new PointerEvent('pointerup', opts));
+                } catch (e) {}
+                el.dispatchEvent(new MouseEvent('mouseup', opts));
+                el.dispatchEvent(new MouseEvent('click', opts));
+                if (typeof el.click === 'function') { el.click(); }
+                return true;
+            }
+
             function clickSubmit(el, labels) {
                 var byText = findButtonByText(labels);
-                if (byText) { byText.click(); return; }
+                if (byText) { return fireClick(byText); }
                 var btn = document.querySelector('button[type="submit"], input[type="submit"]');
-                if (btn && visible(btn)) { btn.click(); return; }
+                if (btn && visible(btn)) { return fireClick(btn); }
                 var form = el ? el.form : null;
                 if (form) {
                     if (typeof form.requestSubmit === 'function') { form.requestSubmit(); }
                     else { form.submit(); }
+                    return true;
                 }
+                return false;
             }
 
             // Priority 1: the "Your Privacy" cookie-consent modal. Must be
@@ -60,14 +88,14 @@ fun inspectAndActScript(username: String, password: String): String {
             // since it can visually sit on top of the real form.
             var acceptCookies = findButtonByText(['accept all cookies', 'accept all', 'accept cookies']);
             if (acceptCookies) {
-                acceptCookies.click();
+                fireClick(acceptCookies);
                 return JSON.stringify({status: 'accepted_cookies', url: window.location.href});
             }
 
             // Priority 2: the "Please complete your profile" popup.
             var askLater = findButtonByText(['ask again tomorrow']);
             if (askLater) {
-                askLater.click();
+                fireClick(askLater);
                 return JSON.stringify({status: 'dismissed_popup', url: window.location.href});
             }
 
@@ -117,9 +145,15 @@ fun inspectAndActScript(username: String, password: String): String {
                     passField.dispatchEvent(new Event('change', { bubbles: true }));
                 }
                 if (userReady && passField.value === "$escapedPass") {
-                    clickSubmit(passField, ['sign in', 'log in', 'submit']);
-                    window.__utdSignInClicked = true;
-                    return JSON.stringify({status: 'submitted_password', url: window.location.href});
+                    var clicked = clickSubmit(passField, ['sign in', 'log in', 'submit']);
+                    if (clicked) {
+                        window.__utdSignInClicked = true;
+                        return JSON.stringify({status: 'submitted_password', url: window.location.href});
+                    }
+                    // Couldn't find/click anything this poll (page may
+                    // still be settling) -- don't latch the guard, try
+                    // again next poll instead of waiting forever.
+                    return JSON.stringify({status: 'filling_password_step', url: window.location.href});
                 }
                 return JSON.stringify({status: 'filling_password_step', url: window.location.href});
             }
@@ -132,8 +166,8 @@ fun inspectAndActScript(username: String, password: String): String {
                 userField.value = "$escapedUser";
                 userField.dispatchEvent(new Event('input', { bubbles: true }));
                 userField.dispatchEvent(new Event('change', { bubbles: true }));
-                clickSubmit(userField, ['continue', 'next']);
-                window.__utdContinueClicked = true;
+                var userClicked = clickSubmit(userField, ['continue', 'next']);
+                if (userClicked) { window.__utdContinueClicked = true; }
                 return JSON.stringify({status: 'submitted_username', url: window.location.href});
             }
 

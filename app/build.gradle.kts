@@ -204,8 +204,21 @@ android {
         // JS flag (window.__utdSignInClicked / __utdContinueClicked) so
         // Sign In/Continue is clicked exactly once per page no matter how
         // many polls run, instead of gating on field values alone.
-        versionCode = 19
-        versionName = "1.4.13"
+        // Round 48i hotfix 7: fields now fill correctly (both username and
+        // password), but Sign In never actually fires -- confirmed from
+        // live testing (it waits the full timeout, then reports "still on
+        // the login page"). Root cause: a plain element.click() doesn't
+        // trigger this button's real handler (same class of problem as the
+        // hotfix-3 Continue-button bug, deeper this time -- the framework
+        // apparently listens for real pointer/mouse gestures, not the
+        // .click() DOM method). Fixed by firing a full synthetic gesture
+        // (pointerdown/mousedown/pointerup/mouseup/click) at the target
+        // element instead of just calling .click(). Also: the "clicked
+        // once" guard now only latches when a button was actually found
+        // and clicked, so a poll where nothing was clickable yet retries
+        // instead of waiting out the whole timeout in silence.
+        versionCode = 20
+        versionName = "1.4.14"
         buildConfigField("String", "GIT_SHA", "\"${gitShaForBuild()}\"")
     }
 
