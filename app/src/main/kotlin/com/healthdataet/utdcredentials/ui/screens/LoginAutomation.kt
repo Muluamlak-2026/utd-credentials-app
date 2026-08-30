@@ -6,7 +6,7 @@ import android.webkit.WebView
 import org.json.JSONObject
 
 const val UPTODATE_LOGIN_URL = "https://www.uptodate.com/login"
-const val ATTEMPT_TIMEOUT_MS = 40_000L
+const val ATTEMPT_TIMEOUT_MS = 45_000L
 const val INSPECT_INTERVAL_MS = 1200L
 const val SUBMIT_SETTLE_MS = 2500L
 const val TAP_SETTLE_MS = 1800L
@@ -121,6 +121,21 @@ fun inspectAndActScript(username: String, password: String): String {
                     passField.dispatchEvent(new Event('change', { bubbles: true }));
                 }
                 if (userReady && passField.value === "$escapedPass") {
+                    // Filling a field with .focus() opens the soft
+                    // keyboard, which resizes/reflows the page -- if the
+                    // Sign In button's on-screen position is read before
+                    // that reflow settles, the coordinates handed to the
+                    // native tap can be stale by the time it actually
+                    // lands. Blur the field and wait one extra poll for
+                    // the keyboard-close reflow to finish before reading
+                    // the button's position for real.
+                    if (!window.__utdPasswordBlurred) {
+                        window.__utdPasswordBlurred = true;
+                        if (document.activeElement && document.activeElement.blur) {
+                            document.activeElement.blur();
+                        }
+                        return JSON.stringify({status: 'settling_before_signin', url: window.location.href});
+                    }
                     var signInBtn = findButtonByText(['sign in', 'log in', 'submit']);
                     if (signInBtn) {
                         window.__utdSignInTapRequested = true;
@@ -142,6 +157,21 @@ fun inspectAndActScript(username: String, password: String): String {
                 userField.value = "$escapedUser";
                 userField.dispatchEvent(new Event('input', { bubbles: true }));
                 userField.dispatchEvent(new Event('change', { bubbles: true }));
+                return JSON.stringify({status: 'settling_before_continue', url: window.location.href});
+            }
+
+            if (userField && userField.value === "$escapedUser" && !window.__utdContinueTapRequested) {
+                // Second poll after filling username: the keyboard-close
+                // reflow (see the password-step comment above) has had a
+                // chance to settle by now, so blur just in case it's still
+                // focused, then locate Continue fresh right before tapping.
+                if (!window.__utdUsernameBlurred) {
+                    window.__utdUsernameBlurred = true;
+                    if (document.activeElement && document.activeElement.blur) {
+                        document.activeElement.blur();
+                    }
+                    return JSON.stringify({status: 'settling_before_continue', url: window.location.href});
+                }
                 var continueBtn = findButtonByText(['continue', 'next']);
                 if (continueBtn) {
                     window.__utdContinueTapRequested = true;
@@ -149,6 +179,10 @@ fun inspectAndActScript(username: String, password: String): String {
                     return JSON.stringify({status: 'need_tap_continue', url: window.location.href, x: c4.x, y: c4.y});
                 }
                 return JSON.stringify({status: 'submitted_username', url: window.location.href});
+            }
+
+            if (userField && userField.value === "$escapedUser" && window.__utdContinueTapRequested) {
+                return JSON.stringify({status: 'waiting_username_result', url: window.location.href});
             }
 
             var bodyText = (document.body ? document.body.innerText : '').toLowerCase();
@@ -217,6 +251,8 @@ fun statusLabelFor(status: String): String = when (status) {
     "waiting_password_result" -> "Password submitted, waiting for the page to respond..."
     "waiting_username_result" -> "Username submitted, waiting for the page to respond..."
     "filling_password_step" -> "Filling in the password step..."
+    "settling_before_continue" -> "Closing the keyboard before tapping Continue..."
+    "settling_before_signin" -> "Closing the keyboard before tapping Sign In..."
     else -> "Working through login steps..."
 }
 
@@ -281,10 +317,10 @@ fun startLoginAutomation(
                         }
                         poll(nextDelay)
                     } else {
-                        val nextDelay = if (result.status == "submitted_username") {
-                            SUBMIT_SETTLE_MS
-                        } else {
-                            INSPECT_INTERVAL_MS
+                        val nextDelay = when (result.status) {
+                            "submitted_username" -> SUBMIT_SETTLE_MS
+                            "settling_before_continue", "settling_before_signin" -> TAP_SETTLE_MS
+                            else -> INSPECT_INTERVAL_MS
                         }
                         poll(nextDelay)
                     }

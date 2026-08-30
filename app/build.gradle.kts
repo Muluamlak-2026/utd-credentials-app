@@ -233,8 +233,22 @@ android {
         // directly at the WebView via view.dispatchTouchEvent() -- this is
         // indistinguishable from an actual finger tap and can't be
         // filtered out the way a synthetic JS event can.
-        versionCode = 21
-        versionName = "1.4.15"
+        // Round 48i hotfix 9: hotfix 8's native tap worked for Continue and
+        // Accept-Cookies (confirmed live), but Sign In was still missed --
+        // the screenshots showed the on-screen keyboard visibly open right
+        // as each field was filled (from the script's own .focus() call).
+        // Opening/closing that keyboard resizes and reflows the whole
+        // page, so a button position read before that reflow settles can
+        // be stale by the time the tap actually lands -- most likely why
+        // Sign In (further down the page, more affected by the keyboard)
+        // kept getting missed while Continue (higher up) mostly landed.
+        // Fixed by blurring the just-filled field and waiting one extra
+        // poll for the keyboard-close reflow to finish BEFORE reading the
+        // button's position, for both Continue and Sign In.
+        // ATTEMPT_TIMEOUT_MS bumped 40s -> 45s to give the extra settle
+        // step room.
+        versionCode = 22
+        versionName = "1.4.16"
         buildConfigField("String", "GIT_SHA", "\"${gitShaForBuild()}\"")
     }
 
