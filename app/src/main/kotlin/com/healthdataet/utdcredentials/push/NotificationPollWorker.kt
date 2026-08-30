@@ -7,6 +7,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.healthdataet.utdcredentials.data.ApiClient
+import com.healthdataet.utdcredentials.data.PollIntervalPrefs
 import com.healthdataet.utdcredentials.data.SessionManager
 import java.util.concurrent.TimeUnit
 
@@ -67,16 +68,54 @@ class NotificationPollWorker(context: Context, params: WorkerParameters) : Corou
     companion object {
         private const val UNIQUE_WORK_NAME = "utd_notification_poll"
 
-        /** Safe to call on every app start -- enqueueUniquePeriodicWork with
-         * KEEP means this is a no-op if the periodic work is already
-         * scheduled from a previous launch. */
+        /** Round 48h: safe to call on every app start. Reads the admin's
+         * actual configured interval (PollIntervalPrefs.backgroundMinutes,
+         * changeable from Security/Notifications settings) instead of a
+         * hardcoded 15 minutes. Compares against
+         * [PollIntervalPrefs.appliedBackgroundMinutes] -- the interval this
+         * exact periodic work is CURRENTLY running at -- and only
+         * cancels+re-enqueues (REPLACE) when they actually differ, since a
+         * WorkManager periodic request's own interval can't be changed in
+         * place. When nothing changed, this stays a plain no-op exactly
+         * like before (KEEP), so opening the app doesn't reset the
+         * periodic timer on every single launch.
+         *
+         * The requested value is still coerced through
+         * PollIntervalPrefs.MIN_BACKGROUND_MINUTES (15) here too, as a
+         * second line of defense -- WorkManager itself would silently
+         * clamp anything lower right back up to 15 anyway (that floor is
+         * an Android OS rule, not this app's choice), but clamping first
+         * means [PollIntervalPrefs.appliedBackgroundMinutes] always
+         * reflects what's ACTUALLY scheduled, not what was merely typed in. */
         fun schedule(context: Context) {
-            val request = PeriodicWorkRequestBuilder<NotificationPollWorker>(15, TimeUnit.MINUTES).build()
-            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-                UNIQUE_WORK_NAME,
-                ExistingPeriodicWorkPolicy.KEEP,
-                request
-            )
+            val prefs = PollIntervalPrefs(context)
+            val desiredMinutes = prefs.backgroundMinutes.coerceAtLeast(PollIntervalPrefs.MIN_BACKGROUND_MINUTES)
+            val alreadyAppliedMinutes = prefs.appliedBackgroundMinutes
+
+            if (alreadyAppliedMinutes == desiredMinutes) {
+                // Same interval already scheduled (or this is a fresh
+                // install with nothing scheduled yet, in which case KEEP
+                // below still enqueues it the first time) -- no need to
+                // disturb an already-running periodic timer.
+                val request = PeriodicWorkRequestBuilder<NotificationPollWorker>(
+                    desiredMinutes.toLong(), TimeUnit.MINUTES
+                ).build()
+                WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+                    UNIQUE_WORK_NAME,
+                    ExistingPeriodicWorkPolicy.KEEP,
+                    request
+                )
+            } else {
+                val request = PeriodicWorkRequestBuilder<NotificationPollWorker>(
+                    desiredMinutes.toLong(), TimeUnit.MINUTES
+                ).build()
+                WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+                    UNIQUE_WORK_NAME,
+                    ExistingPeriodicWorkPolicy.REPLACE,
+                    request
+                )
+            }
+            prefs.appliedBackgroundMinutes = desiredMinutes
         }
     }
 }

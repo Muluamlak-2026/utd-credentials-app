@@ -24,11 +24,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Notifications
@@ -61,6 +64,7 @@ import androidx.compose.ui.window.Dialog
 import com.google.firebase.messaging.FirebaseMessaging
 import com.healthdataet.utdcredentials.data.ApiClient
 import com.healthdataet.utdcredentials.data.PendingWebLogin
+import com.healthdataet.utdcredentials.data.PollIntervalPrefs
 import com.healthdataet.utdcredentials.data.SessionManager
 import com.healthdataet.utdcredentials.data.SiteCredsStore
 import com.healthdataet.utdcredentials.push.NotificationChannels
@@ -217,11 +221,18 @@ fun FullSiteScreen(
             }
         }
 
-        // Repeating foreground poll -- fires immediately, then every 30s
-        // for as long as this screen is on-screen and composed. The
-        // WorkManager worker (NotificationPollWorker, every ~15 min) is
-        // the backstop for when the app isn't open at all; this is the
-        // fast path for while an admin is actually using the app.
+        // Round 48h: fires immediately, then repeats at whatever interval
+        // is currently set in PollIntervalPrefs.foregroundSeconds (default
+        // 30s, changeable from Notifications settings -- a REAL setting,
+        // not cosmetic: the value is re-read at the START of every single
+        // loop iteration below, so changing it in Settings takes effect on
+        // the very next tick, no app restart needed). The WorkManager
+        // worker (NotificationPollWorker) is the backstop for when the app
+        // isn't open at all -- Android enforces a hard 15-minute floor on
+        // that one, which no app can go below; this foreground loop has no
+        // such platform limit since it only runs while the screen is
+        // actually open.
+        val pollPrefs = PollIntervalPrefs(context)
         while (isActive) {
             try {
                 pollNotifications()
@@ -229,7 +240,7 @@ fun FullSiteScreen(
                 // A single failed poll (offline, server hiccup) must never
                 // kill the loop -- just try again next tick.
             }
-            delay(30_000L)
+            delay(pollPrefs.foregroundSeconds.toLong() * 1000L)
         }
     }
 
@@ -246,7 +257,22 @@ fun FullSiteScreen(
                 enter = expandVertically(),
                 exit = shrinkVertically()
             ) {
-                Surface(tonalElevation = 2.dp) {
+                // Round 48f fix: the app draws edge-to-edge (see
+                // enableEdgeToEdge() in MainActivity), which is exactly why
+                // this custom bar needs its own explicit status-bar inset --
+                // Material3's TopAppBar applies this automatically, but a
+                // hand-built Row does not, so without this line the header
+                // drew straight under the phone's clock/battery/signal
+                // icons. Applied to the Surface (not just the Row) so the
+                // header's background color still fills all the way up
+                // behind the status bar, matching how a normal colored app
+                // bar looks -- only the actual content shifts down.
+                Surface(
+                    tonalElevation = 2.dp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .windowInsetsPadding(WindowInsets.statusBars)
+                ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()

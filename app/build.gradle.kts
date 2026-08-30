@@ -128,8 +128,13 @@ android {
         // Round 48f: compact auto-hiding header (FullSiteScreen.kt) --
         // bumped per the Round 48e lesson: every code change from now on
         // gets a bump, no exceptions, so the Build line is always trustworthy.
-        versionCode = 10
-        versionName = "1.4.4"
+        // Round 48g: fixed the header drawing under the status bar
+        // (clock/battery/signal) -- see FullSiteScreen.kt.
+        // Round 48h: real, working poll-interval settings (foreground
+        // seconds + background minutes) -- see PollIntervalPrefs.kt,
+        // NotificationPollWorker.kt, FullSiteScreen.kt, SoundSettingsScreen.kt.
+        versionCode = 12
+        versionName = "1.4.6"
         buildConfigField("String", "GIT_SHA", "\"${gitShaForBuild()}\"")
     }
 

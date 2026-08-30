@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -23,6 +25,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -36,10 +39,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.healthdataet.utdcredentials.data.NotificationPrefs
+import com.healthdataet.utdcredentials.data.PollIntervalPrefs
 import com.healthdataet.utdcredentials.data.SoundPrefs
 import com.healthdataet.utdcredentials.push.NotificationChannels
+import com.healthdataet.utdcredentials.push.NotificationPollWorker
 
 /**
  * Lets the admin pick a distinct sound for each of the 5 alert categories
@@ -56,9 +62,19 @@ fun SoundSettingsScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val soundPrefs = remember { SoundPrefs(context) }
     val notificationPrefs = remember { NotificationPrefs(context) }
+    val pollPrefs = remember { PollIntervalPrefs(context) }
     var pendingCategory by remember { mutableStateOf<String?>(null) }
     // Bumped after every pick so the displayed sound names recompute.
     var refreshTick by remember { mutableStateOf(0) }
+
+    // Round 48h: real, working poll-interval controls -- text fields hold
+    // the raw typed string (so a user can freely clear/retype a number
+    // without it being clamped mid-keystroke), and only commit to
+    // PollIntervalPrefs (which does the actual clamping) once the field
+    // loses focus or a valid number is present. Seeded from the currently
+    // saved values, not hardcoded demo numbers.
+    var foregroundText by remember { mutableStateOf(pollPrefs.foregroundSeconds.toString()) }
+    var backgroundText by remember { mutableStateOf(pollPrefs.backgroundMinutes.toString()) }
 
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -150,10 +166,96 @@ fun SoundSettingsScreen(onBack: () -> Unit) {
                 HorizontalDivider()
             }
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(24.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+            Text("Check Frequency", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(6.dp))
             Text(
-                "You can also change these later from Android's own Settings -> " +
-                    "Apps -> UTD Credentials -> Notifications.",
+                "Real settings, not a demo -- these are the actual values both " +
+                    "checks use. Lower means you hear about new activity sooner, " +
+                    "at the cost of a bit more battery/data.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(16.dp))
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = foregroundText,
+                    onValueChange = { text ->
+                        foregroundText = text
+                        val parsed = text.toIntOrNull()
+                        if (parsed != null) pollPrefs.foregroundSeconds = parsed
+                    },
+                    label = { Text("While app is open") },
+                    suffix = { Text("sec") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.width(160.dp)
+                )
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    "${PollIntervalPrefs.MIN_FOREGROUND_SECONDS}–${PollIntervalPrefs.MAX_FOREGROUND_SECONDS}s",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "How often the app checks for new activity while you actually " +
+                    "have it open on screen. No real floor here beyond avoiding " +
+                    "pointlessly hammering the server -- takes effect on the " +
+                    "very next check, no restart needed.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(Modifier.height(20.dp))
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = backgroundText,
+                    onValueChange = { text ->
+                        backgroundText = text
+                        val parsed = text.toIntOrNull()
+                        if (parsed != null) {
+                            pollPrefs.backgroundMinutes = parsed
+                            NotificationPollWorker.schedule(context)
+                        }
+                    },
+                    label = { Text("While app is closed") },
+                    suffix = { Text("min") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.width(160.dp)
+                )
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    "min ${PollIntervalPrefs.MIN_BACKGROUND_MINUTES}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "How often the app checks in the background while closed. " +
+                    "${PollIntervalPrefs.MIN_BACKGROUND_MINUTES} minutes is a hard " +
+                    "floor Android itself enforces for every app's background " +
+                    "checks on the whole platform -- not a limit this app chose, " +
+                    "and nothing (this app or any other) can go lower. You CAN " +
+                    "raise this above ${PollIntervalPrefs.MIN_BACKGROUND_MINUTES} " +
+                    "if you'd rather trade background responsiveness for battery.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(Modifier.height(24.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "You can also change on/off and sound later from Android's own " +
+                    "Settings -> Apps -> UTD Credentials -> Notifications.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
