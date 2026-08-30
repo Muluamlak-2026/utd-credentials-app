@@ -31,6 +31,14 @@ private const val ROUTE_SOUNDS = "sounds"
 private const val ROUTE_SECURITY = "security"
 private const val ROUTE_DIAGNOSTICS = "diagnostics"
 
+/** Round 47b: how long the app stays unlocked after being backgrounded
+ * (switched to another app, or minimized) before the lock gate re-arms.
+ * Previously this was 0 -- every single ON_STOP re-locked instantly, so
+ * even a brief switch to paste a code from an SMS app, or the system
+ * simply re-maximizing the task, forced a fresh PIN/pattern/fingerprint
+ * every time. */
+private const val LOCK_GRACE_PERIOD_MS = 3 * 60 * 1000L
+
 /**
  * Destinations under the actual nav graph, plus a lock gate that sits
  * IN FRONT of all of them (round 32's app-lock feature) -- Login handles
@@ -44,9 +52,12 @@ private const val ROUTE_DIAGNOSTICS = "diagnostics"
  *
  * The lock gate is intentionally OUTSIDE the NavHost's own back stack: it
  * is re-armed every time the app returns from the background (whatever
- * screen was showing before), not just on cold start, by resetting
- * [unlocked] to false on Lifecycle.Event.ON_STOP whenever a lock method is
- * configured.
+ * screen was showing before) -- not on every single ON_STOP any more
+ * (round 47b), but only once the app has actually been away for at least
+ * [LOCK_GRACE_PERIOD_MS]. [backgroundedAt] records when it left; ON_START
+ * (coming back to the foreground) is what decides whether that gap was
+ * long enough to reset [unlocked] to false. Cold start is unaffected --
+ * [unlocked] still starts false whenever a lock method is configured.
  */
 @Composable
 fun AppNavHost() {
@@ -54,12 +65,27 @@ fun AppNavHost() {
     val session = remember { SessionManager(context) }
     val lockPrefs = remember { AppLockPrefs(context) }
     var unlocked by remember { mutableStateOf(!lockPrefs.isLockEnabled) }
+    var backgroundedAt by remember { mutableStateOf(0L) }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP && lockPrefs.isLockEnabled) {
-                unlocked = false
+            when (event) {
+                Lifecycle.Event.ON_STOP -> {
+                    if (lockPrefs.isLockEnabled) {
+                        backgroundedAt = System.currentTimeMillis()
+                    }
+                }
+                Lifecycle.Event.ON_START -> {
+                    if (lockPrefs.isLockEnabled && backgroundedAt != 0L) {
+                        val awayMs = System.currentTimeMillis() - backgroundedAt
+                        if (awayMs >= LOCK_GRACE_PERIOD_MS) {
+                            unlocked = false
+                        }
+                        backgroundedAt = 0L
+                    }
+                }
+                else -> {}
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)

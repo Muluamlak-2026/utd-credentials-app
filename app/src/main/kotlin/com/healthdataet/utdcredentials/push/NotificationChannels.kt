@@ -105,14 +105,48 @@ object NotificationChannels {
         }
     }
 
+    /** Round 47b: bump this whenever [createChannel]'s settings change in a
+     * way that matters (e.g. adding vibration, switching importance) --
+     * Android only ever lets a channel's sound/vibration be set ONCE, at
+     * creation, so an already-installed device silently keeps whatever
+     * weaker settings its channels started with even after the app
+     * updates. [migrateChannelsIfNeeded] uses this to force a one-time
+     * delete + recreate of all 5 so existing installs actually pick up
+     * the current settings, not just fresh ones. */
+    private const val CHANNEL_SCHEMA_VERSION = 2
+    private const val VERSION_PREFS_NAME = "utd_credentials_notification_channel_version"
+    private const val VERSION_KEY = "schema_version"
+
+    private fun migrateChannelsIfNeeded(context: Context, manager: NotificationManager) {
+        try {
+            val versionPrefs = context.getSharedPreferences(VERSION_PREFS_NAME, Context.MODE_PRIVATE)
+            val appliedVersion = versionPrefs.getInt(VERSION_KEY, 1)
+            if (appliedVersion >= CHANNEL_SCHEMA_VERSION) return
+            for (category in CATEGORY_ORDER) {
+                try {
+                    manager.deleteNotificationChannel(category)
+                } catch (e: Exception) {
+                    // Never let one category block the rest of the migration.
+                }
+            }
+            versionPrefs.edit().putInt(VERSION_KEY, CHANNEL_SCHEMA_VERSION).apply()
+        } catch (e: Exception) {
+            // Worst case: channels keep whatever settings they already had.
+        }
+    }
+
     /** Creates all 5 channels if they don't exist yet, using either the
      * admin's saved choice (SoundPrefs) or the category's distinct
      * default. Safe to call on every app start -- (re)creating an
-     * already-existing channel with the same id is a no-op on Android. */
+     * already-existing channel with the same id is a no-op on Android,
+     * except right after [migrateChannelsIfNeeded] has just deleted them
+     * all, in which case this is what actually recreates them with the
+     * current (vibration-enabled) settings. */
     fun ensureAll(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         try {
             val manager = context.getSystemService(NotificationManager::class.java) ?: return
+            migrateChannelsIfNeeded(context, manager)
             val prefs = SoundPrefs(context)
             for (category in CATEGORY_ORDER) {
                 try {
@@ -200,14 +234,25 @@ object NotificationChannels {
             context, 0, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val notification = NotificationCompat.Builder(context, channelId)
+        val builder = NotificationCompat.Builder(context, channelId)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
             .setContentText(body)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .build()
+        // Round 47b: on Android O+ the channel (see createChannel) is what
+        // actually controls sound/vibration -- these builder-level calls
+        // are ignored there. Below O there IS no channel at all, so without
+        // these, older devices got a silent, non-vibrating notification no
+        // matter what. Harmless belt-and-suspenders on O+.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            builder.setDefaults(NotificationCompat.DEFAULT_VIBRATE)
+            val soundUri = SoundPrefs(context).getSoundUri(channelId)?.let { Uri.parse(it) }
+                ?: defaultSoundFor(context, channelId)
+            if (soundUri != null) builder.setSound(soundUri)
+        }
+        val notification = builder.build()
         try {
             NotificationManagerCompat.from(context).notify(notificationId, notification)
         } catch (e: SecurityException) {

@@ -10,6 +10,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -24,6 +25,7 @@ import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -88,6 +90,15 @@ fun FullSiteScreen(
     var notificationCount by remember { mutableStateOf(0) }
     var showNotifDialog by remember { mutableStateOf(false) }
     var notifItems by remember { mutableStateOf(listOf<String>()) }
+    // Round 48: a visible loading indicator while a page is in flight --
+    // previously a page navigation (tapping into any admin section) showed
+    // nothing at all in between, which read as the app being unresponsive
+    // on a slow connection. isPageLoading drives a thin progress bar
+    // pinned to the top of the WebView; loadProgress is WebChromeClient's
+    // real navigation progress (0f-1f) so the bar actually reflects how
+    // far the page load has gotten, not just a generic spinner.
+    var isPageLoading by remember { mutableStateOf(true) }
+    var loadProgress by remember { mutableStateOf(0f) }
 
     BackHandler(enabled = canGoBack) {
         webViewRef?.let { if (it.canGoBack()) it.goBack() }
@@ -228,10 +239,14 @@ fun FullSiteScreen(
             )
         }
     ) { padding ->
-        AndroidView(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding),
+                .padding(padding)
+        ) {
+        AndroidView(
+            modifier = Modifier
+                .fillMaxSize(),
             factory = { ctx ->
                 WebView(ctx).apply {
                     layoutParams = ViewGroup.LayoutParams(
@@ -251,10 +266,22 @@ fun FullSiteScreen(
                     CookieManager.getInstance().setAcceptCookie(true)
                     CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
 
-                    webChromeClient = WebChromeClient()
+                    webChromeClient = object : WebChromeClient() {
+                        override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                            super.onProgressChanged(view, newProgress)
+                            loadProgress = newProgress / 100f
+                        }
+                    }
                     webViewClient = object : WebViewClient() {
+                        override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+                            super.onPageStarted(view, url, favicon)
+                            isPageLoading = true
+                            loadProgress = 0f
+                        }
+
                         override fun onPageFinished(view: WebView, url: String?) {
                             super.onPageFinished(view, url)
+                            isPageLoading = false
                             canGoBack = view.canGoBack()
                             // Round 32: auto-fill + submit the web login form
                             // every time this screen lands on /admin/login --
@@ -299,6 +326,7 @@ fun FullSiteScreen(
                         ) {
                             super.onReceivedError(view, request, error)
                             if (request.isForMainFrame) {
+                                isPageLoading = false
                                 view.loadDataWithBaseURL(
                                     null,
                                     connectionErrorHtml(session.baseUrl + "/admin/login", error.description?.toString()),
@@ -314,6 +342,15 @@ fun FullSiteScreen(
                 }
             }
         )
+        if (isPageLoading) {
+            LinearProgressIndicator(
+                progress = loadProgress.coerceIn(0f, 1f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.TopCenter)
+            )
+        }
+        }
     }
 
     if (showNotifDialog) {
