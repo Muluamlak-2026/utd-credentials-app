@@ -1,10 +1,17 @@
 package com.healthdataet.utdcredentials.ui.screens
 
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.app.DownloadManager
+import android.content.ContentValues
+import android.content.Context
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -14,6 +21,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
+import java.io.File
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -371,6 +379,13 @@ fun FullSiteScreen(
                     settings.setSupportZoom(true)
                     settings.cacheMode = WebSettings.LOAD_DEFAULT
 
+                    // Round 48p: see AndroidFileSaverBridge's own doc comment --
+                    // this is what lets exportToCSV() (and anything similar
+                    // added later) save a client-built file directly instead
+                    // of routing it through DownloadManager, which can never
+                    // carry POST-originated content.
+                    addJavascriptInterface(AndroidFileSaverBridge(ctx), "AndroidFileSaver")
+
                     CookieManager.getInstance().setAcceptCookie(true)
                     CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
 
@@ -577,6 +592,72 @@ fun FullSiteScreen(
                         Text("Close")
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Round 48p (contrast/stability follow-up): fixes Export CSV reporting
+ * "Download unsuccessful" on-device even though the button itself no longer
+ * shows an error. Root cause: the earlier fix had the Credentials Hub page
+ * POST the CSV text to a new server route, matching every other export
+ * button on the site -- but Android's DownloadManager (which
+ * setDownloadListener below hands every download off to) NEVER actually
+ * reuses the request that got it there. `DownloadManager.Request(Uri.
+ * parse(url))` always issues its OWN fresh GET request to that URL, with no
+ * POST body at all, regardless of how the WebView originally navigated
+ * there -- so a POST-only export route just 405s on that silent internal
+ * GET, and the download always fails. This isn't fixable from the
+ * DownloadManager side; a WebView download listener can never carry POST
+ * data through to DownloadManager.
+ *
+ * The real fix: skip DownloadManager entirely for anything the page itself
+ * generates client-side (CSV text built in JS, not fetched from a URL).
+ * This bridge is exposed to the page's JS as `window.AndroidFileSaver` --
+ * exportToCSV() in credentials_management.html calls
+ * `AndroidFileSaver.saveTextFile(...)` directly with the already-built CSV
+ * text when it's available (i.e. only inside this app's own WebView, never
+ * in a normal desktop/mobile browser session on the same site), and this
+ * writes the file straight to the phone's Downloads folder with no
+ * network request, no DownloadManager, and no way for a GET-vs-POST
+ * mismatch to ever come up again. The existing form-POST path stays as
+ * the fallback for anyone opening the site in a real browser instead of
+ * this app, where a POST response with Content-Disposition downloads
+ * completely normally (this GET-only limitation is specific to Android's
+ * WebView + DownloadManager pairing, not to browsers in general).
+ */
+class AndroidFileSaverBridge(private val context: Context) {
+    @JavascriptInterface
+    fun saveTextFile(filename: String, content: String, mimeType: String) {
+        val safeName = filename.ifBlank { "download.csv" }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, safeName)
+                    put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                }
+                val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    ?: throw IllegalStateException("MediaStore did not return a Uri")
+                context.contentResolver.openOutputStream(uri)?.use { out ->
+                    out.write(content.toByteArray(Charsets.UTF_8))
+                } ?: throw IllegalStateException("Could not open an output stream")
+            } else {
+                // Pre-Android 10: no scoped-storage MediaStore.Downloads API --
+                // write directly to the public Downloads directory instead,
+                // covered by the WRITE_EXTERNAL_STORAGE permission this app
+                // already declares (maxSdkVersion=28, see AndroidManifest.xml).
+                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                if (!downloadsDir.exists()) downloadsDir.mkdirs()
+                File(downloadsDir, safeName).writeText(content, Charsets.UTF_8)
+            }
+            (context as? Activity)?.runOnUiThread {
+                Toast.makeText(context, "Saved $safeName to Downloads", Toast.LENGTH_SHORT).show()
+            }
+        } catch (e: Exception) {
+            (context as? Activity)?.runOnUiThread {
+                Toast.makeText(context, "Couldn't save $safeName: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }
     }

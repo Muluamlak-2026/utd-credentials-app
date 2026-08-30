@@ -360,8 +360,20 @@ android {
         // Material3's one-size-fits-all default. No accent color itself
         // changed -- only the text drawn on top of it, and only where it
         // was actually hard to read.
-        versionCode = 28
-        versionName = "1.4.22"
+        // Round 48p hotfix 3: Export CSV was still failing on-device
+        // ("Download unsuccessful") even after hotfix 2's POST-to-server
+        // fix -- root cause is that Android's DownloadManager (which every
+        // WebView download goes through) always issues its own fresh GET
+        // request no matter how the page got there, so a POST-only export
+        // route just 405s on that silent internal GET every time. Fixed
+        // for real this time: a new AndroidFileSaverBridge exposes
+        // window.AndroidFileSaver to the page's JS, and exportToCSV() now
+        // hands the CSV text straight to it -- written directly to
+        // Downloads with no network request and no DownloadManager
+        // involved at all, so this exact failure mode can't recur. See
+        // AndroidFileSaverBridge's own doc comment in FullSiteScreen.kt.
+        versionCode = 29
+        versionName = "1.4.23"
         buildConfigField("String", "GIT_SHA", "\"${gitShaForBuild()}\"")
     }
 
