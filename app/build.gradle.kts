@@ -372,8 +372,29 @@ android {
         // Downloads with no network request and no DownloadManager
         // involved at all, so this exact failure mode can't recur. See
         // AndroidFileSaverBridge's own doc comment in FullSiteScreen.kt.
-        versionCode = 29
-        versionName = "1.4.23"
+        // Round 48p (6th update): investigated "push alerts never arrive,
+        // not even silently" (registration/payment/trial/broadcast). The
+        // server side (admin/push.py, and every caller in registration.py/
+        // payment.py/trial.py/the cron/ scripts) still always queues to
+        // admin_notifications first, poll-based and Firebase-independent --
+        // unchanged, and confirmed still wired correctly. What's new here:
+        // SoundSettingsScreen (App Settings -> Notifications) now shows a
+        // real "System notifications: ON/OFF" status card at the top,
+        // exactly like the existing Auto-click helper card, backed by
+        // NotificationManagerCompat.areNotificationsEnabled() -- the actual
+        // OS-level gate that sits in front of FCM, the foreground poll, AND
+        // the WorkManager backstop alike (they all funnel through
+        // NotificationChannels.postSystemNotification's one notify() call).
+        // If POST_NOTIFICATIONS was ever denied (at the first-launch prompt,
+        // or later via the OS's own per-app Notifications switch), nothing
+        // anywhere throws or logs -- notify() just silently does nothing,
+        // which matches the reported symptom exactly even with DND off and
+        // battery optimization already unrestricted. This card turns that
+        // from a guess into a direct, on-screen answer, with a one-tap
+        // "Enable" button straight to this app's system notification
+        // settings when it's off.
+        versionCode = 30
+        versionName = "1.4.24"
         buildConfigField("String", "GIT_SHA", "\"${gitShaForBuild()}\"")
     }
 

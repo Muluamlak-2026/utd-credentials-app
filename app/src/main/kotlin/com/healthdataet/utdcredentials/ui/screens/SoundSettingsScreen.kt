@@ -4,10 +4,12 @@ import android.app.Activity
 import android.content.Intent
 import android.media.RingtoneManager
 import android.net.Uri
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -20,6 +22,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -32,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,8 +44,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.app.NotificationManagerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.healthdataet.utdcredentials.data.NotificationPrefs
 import com.healthdataet.utdcredentials.data.PollIntervalPrefs
 import com.healthdataet.utdcredentials.data.SoundPrefs
@@ -75,6 +86,38 @@ fun SoundSettingsScreen(onBack: () -> Unit) {
     // saved values, not hardcoded demo numbers.
     var foregroundText by remember { mutableStateOf(pollPrefs.foregroundSeconds.toString()) }
     var backgroundText by remember { mutableStateOf(pollPrefs.backgroundMinutes.toString()) }
+
+    // Round 48p (6th update): the one thing that silently defeats every
+    // category toggle/sound below at once. Android 13+ requires the
+    // POST_NOTIFICATIONS runtime permission before ANY system notification
+    // can show, whether it arrives via FCM, the foreground poll, or the
+    // WorkManager backstop -- they all funnel through
+    // NotificationChannels.postSystemNotification's one notify() call.
+    // MainActivity asks for this once on first launch, but if it was ever
+    // denied there, or the OS's per-app Notifications switch gets turned
+    // off later (by the user, or an OEM "clean up unused permissions"
+    // sweep), nothing throws and nothing logs anywhere this app can see --
+    // NotificationManagerCompat.notify() just silently does nothing. That
+    // matches the reported symptom exactly ("push alerts never arrive, not
+    // even silently") even with DND off and battery optimization already
+    // unrestricted, so this is the one check that actually tells apart
+    // "blocked before it ever reaches the app's own notification code" from
+    // every other possible cause, instead of guessing. Re-checked on every
+    // resume (same pattern as CredentialPickerScreen's accessibility-helper
+    // card) since this can be flipped from outside the app at any time.
+    var notificationsEnabled by remember {
+        mutableStateOf(NotificationManagerCompat.from(context).areNotificationsEnabled())
+    }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                notificationsEnabled = NotificationManagerCompat.from(context).areNotificationsEnabled()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -121,6 +164,65 @@ fun SoundSettingsScreen(onBack: () -> Unit) {
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                colors = if (notificationsEnabled) {
+                    CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                } else {
+                    CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+                }
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            if (notificationsEnabled) "System notifications: ON" else "System notifications: OFF",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            if (notificationsEnabled) {
+                                "Every category below can ring/vibrate/show normally."
+                            } else {
+                                "This is why alerts never arrive -- Android is silently blocking all of them, before any category below even matters."
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    if (!notificationsEnabled) {
+                        TextButton(
+                            onClick = {
+                                try {
+                                    context.startActivity(
+                                        Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                            .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    )
+                                } catch (e: Exception) {
+                                    try {
+                                        context.startActivity(
+                                            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                                                .setData(Uri.parse("package:" + context.packageName))
+                                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        )
+                                    } catch (e2: Exception) {
+                                        // Nothing more this screen can do -- the text
+                                        // above already says exactly what to look for.
+                                    }
+                                }
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                        ) { Text("Enable") }
+                    }
+                }
+            }
+
             Text(
                 "Turn each kind of alert on or off, and pick its sound from your " +
                     "phone's own sound picker. A category that's off stays silent " +
