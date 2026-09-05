@@ -435,12 +435,12 @@ fun accessibilityTap(
     cssX: Double,
     cssY: Double,
     viewportWidth: Double?,
-    viewportHeight: Double
+    viewportHeight: Double?
 ): Boolean {
     if (!com.healthdataet.utdcredentials.accessibility.UtdClickAccessibilityService.isActive()) return false
     return try {
         val vw = viewportWidth?.takeIf { it > 0.0 } ?: view.width.toDouble()
-        val vh = viewportHeight.takeIf { it > 0.0 } ?: view.height.toDouble()
+        val vh = viewportHeight?.takeIf { it > 0.0 } ?: view.height.toDouble()
         val localX = (cssX * view.width / vw).toFloat().coerceIn(0f, view.width.toFloat() - 1f)
         val localY = (cssY * view.height / vh).toFloat().coerceIn(0f, view.height.toFloat() - 1f)
         val loc = IntArray(2)
