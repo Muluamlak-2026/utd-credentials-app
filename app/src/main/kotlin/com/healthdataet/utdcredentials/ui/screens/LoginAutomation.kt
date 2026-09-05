@@ -581,11 +581,13 @@ fun startLoginAutomation(
                     // turned the service on).
                     val signInLike = result.status == "need_tap_signin" || result.status == "need_key_signin"
                     val continueLike = result.status == "need_tap_continue" || result.status == "need_key_continue"
-                    val accessibilityHandled = (signInLike || continueLike) &&
-                        com.healthdataet.utdcredentials.accessibility.UtdClickAccessibilityService.isActive() &&
-                        com.healthdataet.utdcredentials.accessibility.UtdClickAccessibilityService.clickButtonByText(
-                            if (signInLike) listOf("sign in", "log in", "submit") else listOf("continue", "next")
-                        )
+                    // Round 50: coordinate tap is the primary mechanism for
+                    // Sign In / Continue. The accessibility node-click path can
+                    // report success even when the WebView page does not actually
+                    // submit, which leaves the login page stuck until timeout.
+                    // The coordinate mapping now uses the DOM viewport dimensions,
+                    // so it must be allowed to run first.
+                    val accessibilityHandled = false
 
                     // Round 49: appended to every status line so a screenshot
                     // during a stuck/timed-out attempt actually reveals which
