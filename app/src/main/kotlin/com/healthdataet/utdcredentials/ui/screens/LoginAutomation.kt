@@ -22,7 +22,7 @@ const val UPTODATE_LOGIN_URL = "https://www.uptodate.com/login"
 // "timed out" failure. This only affects how long a stuck attempt is
 // allowed to keep trying before giving up -- it does not slow down any
 // attempt that finishes normally.
-const val ATTEMPT_TIMEOUT_MS = 75_000L
+const val ATTEMPT_TIMEOUT_MS = 35_000L
 const val INSPECT_INTERVAL_MS = 1200L
 const val SUBMIT_SETTLE_MS = 2500L
 const val TAP_SETTLE_MS = 1800L
@@ -602,16 +602,13 @@ fun startLoginAutomation(
                         onStatus(statusLabelFor(result.status) + mechanismTag)
                         poll(SUBMIT_SETTLE_MS)
                     } else if (result.status in tapStatuses && result.tapX != null && result.tapY != null) {
-                        // Round 49: try a real system-injected touch through
-                        // the Accessibility Service FIRST (see
-                        // accessibilityTap's doc comment) -- only falls back
-                        // to the in-process nativeTap when the service isn't
-                        // active or the OS didn't accept the gesture.
-                        val didAccessibilityTap = accessibilityTap(view, result.tapX, result.tapY, result.viewportWidth, result.viewportHeight)
-                        mechanismTag = if (didAccessibilityTap) " [accessibility: gesture tap]" else " [in-app tap]"
-                        if (!didAccessibilityTap) {
-                            nativeTap(view, result.tapX, result.tapY, result.viewportWidth, result.viewportHeight)
-                        }
+                        // Round 52: use the corrected WebView coordinate tap FIRST.
+                        // Accessibility dispatchGesture() only reports that Android
+                        // accepted the gesture request; that does not prove the
+                        // WebView actually received the tap. Keep Accessibility as
+                        // the fallback mechanism.
+                        nativeTap(view, result.tapX, result.tapY, result.viewportWidth, result.viewportHeight)
+                        mechanismTag = " [in-app tap]"
                         onStatus(statusLabelFor(result.status) + mechanismTag)
                         val nextDelay = if (result.status == "need_tap_continue" || result.status == "need_tap_signin") {
                             SUBMIT_SETTLE_MS
