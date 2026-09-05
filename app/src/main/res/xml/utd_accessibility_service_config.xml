@@ -10,11 +10,31 @@
     inert everywhere else on the phone, and only runs at all once the admin
     manually enables it in Settings > Accessibility (a one-time, admin-only
     action Android requires for every accessibility service).
+
+    Round 49: android:canPerformGestures added -- lets the service call
+    dispatchGesture() (see UtdClickAccessibilityService.tapAtScreenPoint),
+    a real SYSTEM-INJECTED touch through the actual input pipeline, the
+    same mechanism TalkBack/Switch Access use to "tap" for a user. Reported
+    symptom even with the service confirmed ON: the ACTION_CLICK node-tree
+    approach and the in-app dispatchTouchEvent tap both still failed to
+    register on uptodate.com's real Sign In button (page never navigated,
+    eventually times out) -- both of those either depend on the WebView's
+    Chromium engine having actually exposed its DOM as an accessibility
+    node tree (not guaranteed, and not verifiable from outside a live
+    device), or produce a MotionEvent with no real touchscreen input-device
+    source that some engines can tell apart from a genuine touch.
+    dispatchGesture sidesteps both problems entirely -- it doesn't need any
+    node tree at all, just the same on-screen coordinates the JS script
+    already computes, and the resulting touch is indistinguishable from a
+    real finger tap at the OS level. Without this attribute, dispatchGesture
+    silently does nothing (returns false) even with the service otherwise
+    fully enabled.
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:description="@string/utd_accessibility_service_description"
     android:accessibilityEventTypes="typeAllMask"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:canRetrieveWindowContent="true"
+    android:canPerformGestures="true"
     android:notificationTimeout="100"
     android:packageNames="com.healthdataet.utdcredentials" />

@@ -1,7 +1,9 @@
 package com.healthdataet.utdcredentials.accessibility
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
 import android.content.Context
+import android.graphics.Path
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -125,6 +127,48 @@ class UtdClickAccessibilityService : AccessibilityService() {
                 // flow -- the tap/key-press fallback chain still runs.
             }
             return false
+        }
+
+        /**
+         * Round 49: the escalation beyond [clickButtonByText] -- that
+         * mechanism needs Chromium to have already exposed the WebView's
+         * DOM as an accessibility node tree, which isn't guaranteed (and
+         * reportedly still wasn't enough: Sign In kept timing out even
+         * with the service confirmed ON). This instead dispatches a real
+         * SYSTEM-INJECTED touch gesture, through the actual Android input
+         * pipeline, at an absolute on-screen point -- the same mechanism
+         * TalkBack/Switch Access use to "tap" for a user without ever
+         * touching the screen. It needs no node tree and no knowledge of
+         * what's at that point; it is, at the OS level, indistinguishable
+         * from a real finger tap landing there. [x]/[y] must already be
+         * absolute screen coordinates (the caller is responsible for
+         * adding the WebView's own on-screen offset to the CSS-pixel
+         * coordinates the login page's JS already computed -- see
+         * LoginAutomation.kt's accessibilityTap). A short 1px move over
+         * ~70ms mirrors nativeTap's own hold+move timing (round 48l) for
+         * the same reason: a truly instantaneous, motionless synthetic tap
+         * is exactly what real touch handlers often key off of to detect
+         * something isn't a genuine touch.
+         *
+         * Returns true only if the OS actually accepted the gesture for
+         * dispatch (e.g. false if another gesture from this service is
+         * still in flight) -- not a guarantee the page's handler reacted,
+         * which is why the caller still polls and re-evaluates afterward
+         * exactly as it already does for every other click mechanism here.
+         */
+        fun tapAtScreenPoint(x: Float, y: Float): Boolean {
+            val svc = instance ?: return false
+            return try {
+                val path = Path().apply {
+                    moveTo(x, y)
+                    lineTo(x + 1f, y + 1f)
+                }
+                val stroke = GestureDescription.StrokeDescription(path, 0L, 70L)
+                val gesture = GestureDescription.Builder().addStroke(stroke).build()
+                svc.dispatchGesture(gesture, null, null)
+            } catch (e: Exception) {
+                false
+            }
         }
     }
 }

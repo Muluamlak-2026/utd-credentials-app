@@ -393,8 +393,34 @@ android {
         // from a guess into a direct, on-screen answer, with a one-tap
         // "Enable" button straight to this app's system notification
         // settings when it's off.
-        versionCode = 30
-        versionName = "1.4.24"
+        // Round 49: Sign In/Continue STILL failed to register even with the
+        // Accessibility Service confirmed ON (round 48p's ACTION_CLICK
+        // node-click escalation) -- reported as a consistent TIMEOUT, the
+        // real login page visibly still sitting there with the button
+        // untouched. ACTION_CLICK depends on Chromium having already
+        // exposed the WebView's DOM as an accessibility node tree, which
+        // isn't guaranteed to have happened for a given WebView instance;
+        // nativeTap (dispatchTouchEvent, same-process) produces a
+        // MotionEvent with no real touchscreen input-device source, which
+        // some touch handlers can tell apart from a genuine tap. This adds
+        // a further escalation ABOVE both: AccessibilityService.dispatchGesture,
+        // a real gesture injected through the actual system input pipeline
+        // (the same mechanism TalkBack/Switch Access use) at the exact
+        // on-screen point the login page's JS already computed -- no node
+        // tree needed, and indistinguishable from a real finger tap at the
+        // OS level. Requires android:canPerformGestures="true" (added to
+        // utd_accessibility_service_config.xml this round -- without it,
+        // dispatchGesture silently does nothing even with the service
+        // otherwise fully enabled). Falls back to the existing nativeTap
+        // automatically whenever the service isn't active or the gesture
+        // isn't accepted, so nothing changes for anyone who hasn't turned
+        // the Accessibility Service on. Every status line during a login
+        // attempt now also tags which mechanism actually fired (e.g.
+        // "[accessibility: gesture tap]" / "[in-app tap]") so a future
+        // screenshot of a stuck attempt says which mechanism ran instead of
+        // just the generic step name.
+        versionCode = 31
+        versionName = "1.4.25"
         buildConfigField("String", "GIT_SHA", "\"${gitShaForBuild()}\"")
     }
 

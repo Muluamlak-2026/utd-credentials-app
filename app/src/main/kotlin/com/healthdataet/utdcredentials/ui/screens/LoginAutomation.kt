@@ -404,6 +404,34 @@ fun nativeTap(view: WebView, cssX: Double, cssY: Double) {
 }
 
 /**
+ * Round 49: tries a real, system-injected touch (via the Accessibility
+ * Service's dispatchGesture -- see UtdClickAccessibilityService.tapAtScreenPoint's
+ * own doc comment for why this is a meaningfully different mechanism from
+ * both the ACTION_CLICK node-click and nativeTap above) at the exact same
+ * [cssX]/[cssY] page coordinates the login page's JS already computed.
+ * dispatchGesture works in absolute SCREEN coordinates, not CSS/view-local
+ * ones, so this adds the WebView's own on-screen position (getLocationOnScreen)
+ * to the same scale-adjusted offset nativeTap already uses. Returns false
+ * (never throws) whenever the service isn't active or the OS didn't accept
+ * the gesture for dispatch -- the caller falls back to nativeTap in that
+ * case exactly as before this round, so nothing regresses when the admin
+ * hasn't turned the Accessibility Service on.
+ */
+fun accessibilityTap(view: WebView, cssX: Double, cssY: Double): Boolean {
+    if (!com.healthdataet.utdcredentials.accessibility.UtdClickAccessibilityService.isActive()) return false
+    return try {
+        val scale = if (view.scale > 0f) view.scale else 1f
+        val loc = IntArray(2)
+        view.getLocationOnScreen(loc)
+        val screenX = loc[0] + (cssX * scale).toFloat()
+        val screenY = loc[1] + (cssY * scale).toFloat()
+        com.healthdataet.utdcredentials.accessibility.UtdClickAccessibilityService.tapAtScreenPoint(screenX, screenY)
+    } catch (e: Exception) {
+        false
+    }
+}
+
+/**
  * Round 48n: the second Sign In/Continue retry attempt (see
  * inspectAndActScript's verify-then-retry blocks) uses this instead of
  * another coordinate tap -- a completely different, coordinate-free
@@ -515,7 +543,6 @@ fun startLoginAutomation(
                     }
                 } else {
                     consecutiveFinal = 0
-                    onStatus(statusLabelFor(result.status))
                     // Round 48p: for Sign In/Continue specifically (never
                     // cookies/popup, which already work fine on every
                     // attempt) -- if the admin has enabled the
@@ -538,10 +565,30 @@ fun startLoginAutomation(
                             if (signInLike) listOf("sign in", "log in", "submit") else listOf("continue", "next")
                         )
 
+                    // Round 49: appended to every status line so a screenshot
+                    // during a stuck/timed-out attempt actually reveals which
+                    // click mechanism was tried, instead of every attempt
+                    // showing the same generic "Password submitted, waiting
+                    // for the page to respond..." regardless of what was
+                    // really attempted underneath.
+                    var mechanismTag = ""
+
                     if (accessibilityHandled) {
+                        mechanismTag = " [accessibility: node click]"
+                        onStatus(statusLabelFor(result.status) + mechanismTag)
                         poll(SUBMIT_SETTLE_MS)
                     } else if (result.status in tapStatuses && result.tapX != null && result.tapY != null) {
-                        nativeTap(view, result.tapX, result.tapY)
+                        // Round 49: try a real system-injected touch through
+                        // the Accessibility Service FIRST (see
+                        // accessibilityTap's doc comment) -- only falls back
+                        // to the in-process nativeTap when the service isn't
+                        // active or the OS didn't accept the gesture.
+                        val didAccessibilityTap = accessibilityTap(view, result.tapX, result.tapY)
+                        mechanismTag = if (didAccessibilityTap) " [accessibility: gesture tap]" else " [in-app tap]"
+                        if (!didAccessibilityTap) {
+                            nativeTap(view, result.tapX, result.tapY)
+                        }
+                        onStatus(statusLabelFor(result.status) + mechanismTag)
                         val nextDelay = if (result.status == "need_tap_continue" || result.status == "need_tap_signin") {
                             SUBMIT_SETTLE_MS
                         } else {
@@ -550,8 +597,10 @@ fun startLoginAutomation(
                         poll(nextDelay)
                     } else if (result.status in keyStatuses) {
                         nativeEnterKeyPress(view)
+                        onStatus(statusLabelFor(result.status) + " [in-app key press]")
                         poll(SUBMIT_SETTLE_MS)
                     } else {
+                        onStatus(statusLabelFor(result.status))
                         val nextDelay = when (result.status) {
                             "submitted_username" -> SUBMIT_SETTLE_MS
                             "settling_before_continue", "settling_before_signin" -> SETTLE_POLL_MS
