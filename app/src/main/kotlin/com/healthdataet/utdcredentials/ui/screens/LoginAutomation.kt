@@ -545,10 +545,14 @@ fun startLoginAutomation(
     val finalConfirmationsNeeded = 2
     var consecutiveFinal = 0
     val tapStatuses = setOf("need_tap_cookies", "need_tap_popup", "need_tap_continue", "need_tap_signin")
-    // Round 48n: the coordinate-free fallback -- see nativeEnterKeyPress's
-    // own doc comment for why a focus+ENTER key event is a genuinely
-    // different mechanism from a tap, not just a repeat of the same one.
     val keyStatuses = setOf("need_key_continue", "need_key_signin")
+
+    // Sign In fallback stages:
+    // 0 = native WebView touch
+    // 1 = Accessibility system gesture
+    // 2 = Enter-key fallback
+    // 3 = all mechanisms exhausted; keep polling until the 35-second timeout
+    var signInFallbackStage = 0
 
     fun poll(delayMs: Long) {
         view.postDelayed({
@@ -562,6 +566,145 @@ fun startLoginAutomation(
                         onResolved(outcomeFromFinal(result))
                     } else {
                         poll(INSPECT_INTERVAL_MS)
+                    }
+                } else {
+                    consecutiveFinal = 0
+
+                    var mechanismTag = ""
+
+                    val signInLike =
+                        result.status == "need_tap_signin" ||
+                        result.status == "need_key_signin"
+
+                    if (signInLike &&
+                        result.tapX != null &&
+                        result.tapY != null) {
+
+                        when (signInFallbackStage) {
+
+                            0 -> {
+                                // FIRST: corrected native WebView touch.
+                                // This is the primary Sign In mechanism.
+                                nativeTap(
+                                    view,
+                                    result.tapX,
+                                    result.tapY,
+                                    result.viewportWidth,
+                                    result.viewportHeight
+                                )
+
+                                signInFallbackStage = 1
+                                mechanismTag = " [Sign In: native touch]"
+                                onStatus(statusLabelFor(result.status) + mechanismTag)
+
+                                poll(SUBMIT_SETTLE_MS)
+                            }
+
+                            1 -> {
+                                // SECOND: Android Accessibility system gesture.
+                                // Only reached after the native touch has had
+                                // time to produce a result.
+                                val accessibilityWorked = accessibilityTap(
+                                    view,
+                                    result.tapX,
+                                    result.tapY,
+                                    result.viewportWidth,
+                                    result.viewportHeight
+                                )
+
+                                signInFallbackStage = 2
+
+                                if (accessibilityWorked) {
+                                    mechanismTag = " [Sign In: accessibility gesture]"
+                                    onStatus(statusLabelFor(result.status) + mechanismTag)
+                                    poll(SUBMIT_SETTLE_MS)
+                                } else {
+                                    // Accessibility is unavailable/rejected.
+                                    // Immediately use the final fallback.
+                                    nativeEnterKeyPress(view)
+
+                                    signInFallbackStage = 3
+                                    mechanismTag = " [Sign In: Enter fallback]"
+                                    onStatus(statusLabelFor(result.status) + mechanismTag)
+
+                                    poll(SUBMIT_SETTLE_MS)
+                                }
+                            }
+
+                            2 -> {
+                                // THIRD: keyboard Enter fallback.
+                                nativeEnterKeyPress(view)
+
+                                signInFallbackStage = 3
+                                mechanismTag = " [Sign In: Enter fallback]"
+                                onStatus(statusLabelFor(result.status) + mechanismTag)
+
+                                poll(SUBMIT_SETTLE_MS)
+                            }
+
+                            else -> {
+                                // All activation mechanisms have already been
+                                // attempted. Do not repeatedly tap Sign In.
+                                // Allow the normal 35-second attempt timeout
+                                // to determine the final result.
+                                mechanismTag = " [Sign In: waiting for result]"
+                                onStatus(statusLabelFor(result.status) + mechanismTag)
+
+                                poll(SUBMIT_SETTLE_MS)
+                            }
+                        }
+
+                    } else if (result.status in tapStatuses &&
+                        result.tapX != null &&
+                        result.tapY != null) {
+
+                        // Cookie / popup / Continue behavior remains unchanged.
+                        nativeTap(
+                            view,
+                            result.tapX,
+                            result.tapY,
+                            result.viewportWidth,
+                            result.viewportHeight
+                        )
+
+                        mechanismTag = " [in-app tap]"
+                        onStatus(statusLabelFor(result.status) + mechanismTag)
+
+                        val nextDelay =
+                            if (result.status == "need_tap_continue") {
+                                SUBMIT_SETTLE_MS
+                            } else {
+                                TAP_SETTLE_MS
+                            }
+
+                        poll(nextDelay)
+
+                    } else if (result.status in keyStatuses) {
+
+                        nativeEnterKeyPress(view)
+                        onStatus(statusLabelFor(result.status) + " [in-app key press]")
+
+                        poll(SUBMIT_SETTLE_MS)
+
+                    } else {
+
+                        onStatus(statusLabelFor(result.status))
+
+                        val nextDelay = when (result.status) {
+                            "submitted_username" -> SUBMIT_SETTLE_MS
+                            "settling_before_continue",
+                            "settling_before_signin" -> SETTLE_POLL_MS
+                            else -> INSPECT_INTERVAL_MS
+                        }
+
+                        poll(nextDelay)
+                    }
+                }
+            }
+        }, delayMs)
+    }
+
+    poll(INSPECT_INTERVAL_MS)
                     }
                 } else {
                     consecutiveFinal = 0
