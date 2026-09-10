@@ -19,6 +19,7 @@ plugins {
 // AppSettingsScreen -- see that file for where.
 fun gitShaForBuild(): String = try {
     val process = ProcessBuilder("git", "rev-parse", "--short", "HEAD")
+        .directory(rootDir)
         .redirectErrorStream(true)
         .start()
     val output = process.inputStream.bufferedReader().readText().trim()
@@ -419,17 +420,8 @@ android {
         // "[accessibility: gesture tap]" / "[in-app tap]") so a future
         // screenshot of a stuck attempt says which mechanism ran instead of
         // just the generic step name.
-        // Round 54: Pause/Resume control added to the Sequential Login screen
-        // (SequentialLoginScreen.kt) -- freezes the batch where it is without
-        // losing any gathered results, resumes cleanly from the same queue
-        // position. Pure batch control flow; no change to the click mechanism.
-        // Round 55: per-attempt give-up timeout shortened 75s -> 15s
-        // (LoginAutomation.kt ATTEMPT_TIMEOUT_MS) so the batch moves on
-        // quickly from any credential that isn't tapped, instead of parking
-        // 75s on it. Both changes fold into this single build/deploy; no
-        // existing feature removed.
-        versionCode = 33
-        versionName = "1.4.27"
+        versionCode = 31
+        versionName = "1.4.25"
         buildConfigField("String", "GIT_SHA", "\"${gitShaForBuild()}\"")
     }
 

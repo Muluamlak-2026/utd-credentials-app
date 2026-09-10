@@ -1,0 +1,275 @@
+[1mdiff --git a/app/src/main/kotlin/com/healthdataet/utdcredentials/ui/screens/LoginAutomation.kt b/app/src/main/kotlin/com/healthdataet/utdcredentials/ui/screens/LoginAutomation.kt[m
+[1mindex ebab401..4c13ea6 100644[m
+[1m--- a/app/src/main/kotlin/com/healthdataet/utdcredentials/ui/screens/LoginAutomation.kt[m
+[1m+++ b/app/src/main/kotlin/com/healthdataet/utdcredentials/ui/screens/LoginAutomation.kt[m
+[36m@@ -544,20 +544,39 @@[m [mfun startLoginAutomation([m
+ ) {[m
+     val finalConfirmationsNeeded = 2[m
+     var consecutiveFinal = 0[m
+[31m-    val tapStatuses = setOf("need_tap_cookies", "need_tap_popup", "need_tap_continue", "need_tap_signin")[m
+[31m-    // Round 48n: the coordinate-free fallback -- see nativeEnterKeyPress's[m
+[31m-    // own doc comment for why a focus+ENTER key event is a genuinely[m
+[31m-    // different mechanism from a tap, not just a repeat of the same one.[m
+[31m-    val keyStatuses = setOf("need_key_continue", "need_key_signin")[m
+[32m+[m
+[32m+[m[32m    // Sign In gets three genuinely different mechanisms:[m
+[32m+[m[32m    //   1. corrected in-app coordinate touch[m
+[32m+[m[32m    //   2. Android Accessibility gesture[m
+[32m+[m[32m    //   3. coordinate-free keyboard ENTER[m
+[32m+[m[32m    //[m
+[32m+[m[32m    // We intentionally keep cookies/popup/Continue on their existing paths.[m
+[32m+[m[32m    var signInFallbackStage = 0[m
+[32m+[m
+[32m+[m[32m    val tapStatuses = setOf([m
+[32m+[m[32m        "need_tap_cookies",[m
+[32m+[m[32m        "need_tap_popup",[m
+[32m+[m[32m        "need_tap_continue",[m
+[32m+[m[32m        "need_tap_signin"[m
+[32m+[m[32m    )[m
+[32m+[m
+[32m+[m[32m    val keyStatuses = setOf([m
+[32m+[m[32m        "need_key_continue",[m
+[32m+[m[32m        "need_key_signin"[m
+[32m+[m[32m    )[m
+ [m
+     fun poll(delayMs: Long) {[m
+         view.postDelayed({[m
+             if (isResolved()) return@postDelayed[m
+[32m+[m
+             view.evaluateJavascript(inspectAndActScript(username, password)) { raw ->[m
+                 if (isResolved()) return@evaluateJavascript[m
+[32m+[m
+                 val result = interpretInspectResult(raw)[m
+[32m+[m
+                 if (result.status == "final") {[m
+                     consecutiveFinal++[m
+[32m+[m
+                     if (consecutiveFinal >= finalConfirmationsNeeded) {[m
+                         onResolved(outcomeFromFinal(result))[m
+                     } else {[m
+[36m@@ -565,68 +584,170 @@[m [mfun startLoginAutomation([m
+                     }[m
+                 } else {[m
+                     consecutiveFinal = 0[m
+[31m-                    // Round 48p: for Sign In/Continue specifically (never[m
+[31m-                    // cookies/popup, which already work fine on every[m
+[31m-                    // attempt) -- if the admin has enabled the[m
+[31m-                    // Accessibility Service fallback, try a real[m
+[31m-                    // ACTION_CLICK on the button's own accessibility node[m
+[31m-                    // FIRST, on every single dispatch (first attempt and[m
+[31m-                    // every retry), before falling back to whatever the JS[m
+[31m-                    // status already asked for (a coordinate tap or a key[m
+[31m-                    // press). See UtdClickAccessibilityService's doc[m
+[31m-                    // comment for why this is the most reliable mechanism[m
+[31m-                    // when it's available, and why it costs nothing to try[m
+[31m-                    // first when it isn't (isActive() is a cheap null[m
+[31m-                    // check, so this is a no-op unless the admin actually[m
+[31m-                    // turned the service on).[m
+[31m-                    val signInLike = result.status == "need_tap_signin" || result.status == "need_key_signin"[m
+[31m-                    val continueLike = result.status == "need_tap_continue" || result.status == "need_key_continue"[m
+[31m-                    // Round 50: coordinate tap is the primary mechanism for[m
+[31m-                    // Sign In / Continue. The accessibility node-click path can[m
+[31m-                    // report success even when the WebView page does not actually[m
+[31m-                    // submit, which leaves the login page stuck until timeout.[m
+[31m-                    // The coordinate mapping now uses the DOM viewport dimensions,[m
+[31m-                    // so it must be allowed to run first.[m
+[31m-                    val accessibilityHandled = false[m
+[31m-[m
+[31m-                    // Round 49: appended to every status line so a screenshot[m
+[31m-                    // during a stuck/timed-out attempt actually reveals which[m
+[31m-                    // click mechanism was tried, instead of every attempt[m
+[31m-                    // showing the same generic "Password submitted, waiting[m
+[31m-                    // for the page to respond..." regardless of what was[m
+[31m-                    // really attempted underneath.[m
+[32m+[m
+                     var mechanismTag = ""[m
+ [m
+[31m-                    if (accessibilityHandled) {[m
+[31m-                        mechanismTag = " [accessibility: node click]"[m
+[31m-                        onStatus(statusLabelFor(result.status) + mechanismTag)[m
+[31m-                        poll(SUBMIT_SETTLE_MS)[m
+[31m-                    } else if (result.status in tapStatuses && result.tapX != null && result.tapY != null) {[m
+[31m-                        // Round 52: use the corrected WebView coordinate tap FIRST.[m
+[31m-                        // Accessibility dispatchGesture() only reports that Android[m
+[31m-                        // accepted the gesture request; that does not prove the[m
+[31m-                        // WebView actually received the tap. Keep Accessibility as[m
+[31m-                        // the fallback mechanism.[m
+[31m-                        nativeTap(view, result.tapX, result.tapY, result.viewportWidth, result.viewportHeight)[m
+[31m-                        mechanismTag = " [in-app tap]"[m
+[31m-                        onStatus(statusLabelFor(result.status) + mechanismTag)[m
+[31m-                        val nextDelay = if (result.status == "need_tap_continue" || result.status == "need_tap_signin") {[m
+[31m-                            SUBMIT_SETTLE_MS[m
+[32m+[m[32m                    /*[m
+[32m+[m[32m                     * SIGN IN:[m
+[32m+[m[32m                     *[m
+[32m+[m[32m                     * Stage 0 = corrected native WebView touch.[m
+[32m+[m[32m                     * Stage 1 = Android Accessibility gesture.[m
+[32m+[m[32m                     * Stage 2 = keyboard ENTER.[m
+[32m+[m[32m                     *[m
+[32m+[m[32m                     * The JavaScript deliberately reports coordinates rather[m
+[32m+[m[32m                     * than using element.click(), because this page requires[m
+[32m+[m[32m                     * a real trusted user-like interaction.[m
+[32m+[m[32m                     */[m
+[32m+[m[32m                    if (result.status == "need_tap_signin" &&[m
+[32m+[m[32m                        result.tapX != null &&[m
+[32m+[m[32m                        result.tapY != null[m
+[32m+[m[32m                    ) {[m
+[32m+[m[32m                        if (signInFallbackStage == 0) {[m
+[32m+[m[32m                            nativeTap([m
+[32m+[m[32m                                view,[m
+[32m+[m[32m                                result.tapX,[m
+[32m+[m[32m                                result.tapY,[m
+[32m+[m[32m                                result.viewportWidth,[m
+[32m+[m[32m                                result.viewportHeight[m
+[32m+[m[32m                            )[m
+[32m+[m
+[32m+[m[32m                            signInFallbackStage = 1[m
+[32m+[m[32m                            mechanismTag = " [sign in: coordinate tap]"[m
+[32m+[m
+[32m+[m[32m                            onStatus([m
+[32m+[m[32m                                statusLabelFor(result.status) + mechanismTag[m
+[32m+[m[32m                            )[m
+[32m+[m
+[32m+[m[32m                            poll(SUBMIT_SETTLE_MS)[m
+[32m+[m[32m                        } else {[m
+[32m+[m[32m                            /*[m
+[32m+[m[32m                             * The coordinate tap has already had its chance.[m
+[32m+[m[32m                             * Do not repeatedly hit the same failing mechanism.[m
+[32m+[m[32m                             * Try the final coordinate-free mechanism.[m
+[32m+[m[32m                             */[m
+[32m+[m[32m                            nativeEnterKeyPress(view)[m
+[32m+[m
+[32m+[m[32m                            signInFallbackStage = 3[m
+[32m+[m[32m                            mechanismTag = " [sign in: keyboard Enter fallback]"[m
+[32m+[m
+[32m+[m[32m                            onStatus([m
+[32m+[m[32m                                statusLabelFor(result.status) + mechanismTag[m
+[32m+[m[32m                            )[m
+[32m+[m
+[32m+[m[32m                            poll(SUBMIT_SETTLE_MS)[m
+[32m+[m[32m                        }[m
+[32m+[m
+[32m+[m[32m                    } else if (result.status == "need_key_signin") {[m
+[32m+[m[32m                        /*[m
+[32m+[m[32m                         * The JS sign-in state machine reaches this after the[m
+[32m+[m[32m                         * first coordinate attempt. Try Accessibility if the[m
+[32m+[m[32m                         * service is actually active. If it is unavailable or[m
+[32m+[m[32m                         * rejects the gesture, immediately use keyboard ENTER.[m
+[32m+[m[32m                         */[m
+[32m+[m[32m                        if (signInFallbackStage <= 1) {[m
+[32m+[m[32m                            val accessibilityWorked = if ([m
+[32m+[m[32m                                result.tapX != null &&[m
+[32m+[m[32m                                result.tapY != null[m
+[32m+[m[32m                            ) {[m
+[32m+[m[32m                                accessibilityTap([m
+[32m+[m[32m                                    view,[m
+[32m+[m[32m                                    result.tapX,[m
+[32m+[m[32m                                    result.tapY,[m
+[32m+[m[32m                                    result.viewportWidth,[m
+[32m+[m[32m                                    result.viewportHeight[m
+[32m+[m[32m                                )[m
+[32m+[m[32m                            } else {[m
+[32m+[m[32m                                false[m
+[32m+[m[32m                            }[m
+[32m+[m
+[32m+[m[32m                            if (accessibilityWorked) {[m
+[32m+[m[32m                                signInFallbackStage = 2[m
+[32m+[m[32m                                mechanismTag =[m
+[32m+[m[32m                                    " [sign in: Accessibility gesture]"[m
+[32m+[m[32m                            } else {[m
+[32m+[m[32m                                nativeEnterKeyPress(view)[m
+[32m+[m[32m                                signInFallbackStage = 3[m
+[32m+[m[32m                                mechanismTag =[m
+[32m+[m[32m                                    " [sign in: keyboard Enter fallback]"[m
+[32m+[m[32m                            }[m
+[32m+[m
+[32m+[m[32m                            onStatus([m
+[32m+[m[32m                                statusLabelFor(result.status) + mechanismTag[m
+[32m+[m[32m                            )[m
+[32m+[m[32m                            poll(SUBMIT_SETTLE_MS)[m
+                         } else {[m
+[31m-                            TAP_SETTLE_MS[m
+[32m+[m[32m                            nativeEnterKeyPress(view)[m
+[32m+[m[32m                            signInFallbackStage = 3[m
+[32m+[m[32m                            mechanismTag =[m
+[32m+[m[32m                                " [sign in: keyboard Enter retry]"[m
+[32m+[m
+[32m+[m[32m                            onStatus([m
+[32m+[m[32m                                statusLabelFor(result.status) + mechanismTag[m
+[32m+[m[32m                            )[m
+[32m+[m[32m                            poll(SUBMIT_SETTLE_MS)[m
+                         }[m
+[32m+[m
+[32m+[m[32m                    } else if ([m
+[32m+[m[32m                        result.status in tapStatuses &&[m
+[32m+[m[32m                        result.tapX != null &&[m
+[32m+[m[32m                        result.tapY != null[m
+[32m+[m[32m                    ) {[m
+[32m+[m[32m                        /*[m
+[32m+[m[32m                         * Existing working paths for cookies, popup and[m
+[32m+[m[32m                         * Continue remain unchanged.[m
+[32m+[m[32m                         */[m
+[32m+[m[32m                        nativeTap([m
+[32m+[m[32m                            view,[m
+[32m+[m[32m                            result.tapX,[m
+[32m+[m[32m                            result.tapY,[m
+[32m+[m[32m                            result.viewportWidth,[m
+[32m+[m[32m                            result.viewportHeight[m
+[32m+[m[32m                        )[m
+[32m+[m
+[32m+[m[32m                        mechanismTag = " [in-app tap]"[m
+[32m+[m
+[32m+[m[32m                        onStatus([m
+[32m+[m[32m                            statusLabelFor(result.status) + mechanismTag[m
+[32m+[m[32m                        )[m
+[32m+[m
+[32m+[m[32m                        val nextDelay =[m
+[32m+[m[32m                            if (result.status == "need_tap_continue") {[m
+[32m+[m[32m                                SUBMIT_SETTLE_MS[m
+[32m+[m[32m                            } else {[m
+[32m+[m[32m                                TAP_SETTLE_MS[m
+[32m+[m[32m                            }[m
+[32m+[m
+                         poll(nextDelay)[m
+[32m+[m
+                     } else if (result.status in keyStatuses) {[m
+[32m+[m[32m                        /*[m
+[32m+[m[32m                         * Existing coordinate-free Continue fallback.[m
+[32m+[m[32m                         * Sign In was handled above.[m
+[32m+[m[32m                         */[m
+                         nativeEnterKeyPress(view)[m
+[31m-                        onStatus(statusLabelFor(result.status) + " [in-app key press]")[m
+[32m+[m
+[32m+[m[32m                        onStatus([m
+[32m+[m[32m                            statusLabelFor(result.status) +[m
+[32m+[m[32m                                " [in-app key press]"[m
+[32m+[m[32m                        )[m
+[32m+[m
+                         poll(SUBMIT_SETTLE_MS)[m
+[32m+[m
+                     } else {[m
+                         onStatus(statusLabelFor(result.status))[m
+[32m+[m
+                         val nextDelay = when (result.status) {[m
+[31m-                            "submitted_username" -> SUBMIT_SETTLE_MS[m
+[31m-                            "settling_before_continue", "settling_before_signin" -> SETTLE_POLL_MS[m
+[31m-                            else -> INSPECT_INTERVAL_MS[m
+[32m+[m[32m                            "submitted_username" ->[m
+[32m+[m[32m                                SUBMIT_SETTLE_MS[m
+[32m+[m
+[32m+[m[32m                            "settling_before_continue",[m
+[32m+[m[32m                            "settling_before_signin" ->[m
+[32m+[m[32m                                SETTLE_POLL_MS[m
+[32m+[m
+[32m+[m[32m                            else ->[m
+[32m+[m[32m                                INSPECT_INTERVAL_MS[m
+                         }[m
+[32m+[m
+                         poll(nextDelay)[m
+                     }[m
+                 }[m
+[36m@@ -636,3 +757,4 @@[m [mfun startLoginAutomation([m
+ [m
+     poll(INSPECT_INTERVAL_MS)[m
+ }[m
+[41m+[m

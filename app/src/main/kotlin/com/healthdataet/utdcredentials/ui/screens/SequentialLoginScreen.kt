@@ -222,9 +222,28 @@ fun SequentialLoginScreen(session: SessionManager, onBack: () -> Unit) {
     var currentIndex by remember { mutableStateOf(0) }
     var statusText by remember { mutableStateOf("Starting...") }
     var stopRequested by remember { mutableStateOf(false) }
+    // Round 54: Pause freezes the batch exactly where it is without losing
+    // anything already gathered. Every completed attempt's result is already
+    // committed to `results` (and reported) the moment it finished, and
+    // `currentIndex` is the batch's position -- neither is touched by
+    // pausing. Only the ONE attempt currently in flight is affected: while
+    // paused, the LoginAttemptRunner below leaves composition, which tears
+    // down its WebView and cancels its timeout, so that half-done attempt
+    // simply isn't recorded (its credential is still at `currentIndex`,
+    // un-consumed). Resuming re-mounts a fresh runner for that same
+    // `currentIndex`, so it starts that one credential over cleanly and
+    // continues down the queue from there -- "100% sync": no skipped
+    // credentials, no double-recorded results, no lost report rows. This is
+    // exactly the handle for "pause when network/battery is low, or when
+    // there's no human around to tap Sign In, then resume when they're back."
+    var paused by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     val finished = queue.isEmpty() || currentIndex >= queue.size || stopRequested
+    // The single credential's WebView attempt only runs when we're neither
+    // finished nor paused. Layout (below) also keys off this so the result
+    // list takes the whole screen while paused, same as when finished.
+    val running = !finished && !paused
     val successCount = results.count { it.outcome is LoginAttemptOutcome.Success }
     val failCount = results.count {
         it.outcome is LoginAttemptOutcome.Failed || it.outcome is LoginAttemptOutcome.TimedOut
@@ -241,6 +260,14 @@ fun SequentialLoginScreen(session: SessionManager, onBack: () -> Unit) {
                 },
                 actions = {
                     if (!finished) {
+                        // Pause sits next to Stop: Pause is reversible (freeze
+                        // and Resume later), Stop ends the run for good but
+                        // still keeps every result gathered so far.
+                        if (paused) {
+                            TextButton(onClick = { paused = false }) { Text("Resume") }
+                        } else {
+                            TextButton(onClick = { paused = true }) { Text("Pause") }
+                        }
                         TextButton(onClick = { stopRequested = true }) { Text("Stop") }
                     }
                 }
@@ -276,6 +303,20 @@ fun SequentialLoginScreen(session: SessionManager, onBack: () -> Unit) {
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
+                    } else if (paused) {
+                        val pausedCred = queue[currentIndex]
+                        Text(
+                            "Paused at attempt ${currentIndex + 1}/${queue.size}: " +
+                                (pausedCred.ucCode ?: pausedCred.username ?: "credential") +
+                                " -- $successCount ok, $failCount failed so far",
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1
+                        )
+                        Text(
+                            "Frozen here -- nothing gathered so far is lost. Tap Resume when network, battery, or someone to tap Sign In is ready; this credential starts over cleanly and the rest of the queue continues.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     } else {
                         val currentCred = queue[currentIndex]
                         Text(
@@ -289,7 +330,7 @@ fun SequentialLoginScreen(session: SessionManager, onBack: () -> Unit) {
                 }
                 HorizontalDivider()
 
-                if (!finished) {
+                if (running) {
                     Box(modifier = Modifier.weight(0.7f).fillMaxWidth()) {
                         key(currentIndex) {
                             LoginAttemptRunner(
@@ -311,11 +352,11 @@ fun SequentialLoginScreen(session: SessionManager, onBack: () -> Unit) {
 
                 LazyColumn(
                     modifier = Modifier
-                        .weight(if (finished) 1f else 0.3f)
+                        .weight(if (running) 0.3f else 1f)
                         .fillMaxWidth()
                         .padding(horizontal = 12.dp)
                 ) {
-                    items(results.reversed()) { r -> ResultRow(r, compact = !finished) }
+                    items(results.reversed()) { r -> ResultRow(r, compact = running) }
                 }
             }
         }

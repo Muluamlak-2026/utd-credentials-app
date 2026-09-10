@@ -15,14 +15,19 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 const val UPTODATE_LOGIN_URL = "https://www.uptodate.com/login"
-// Round 48p: bumped 55s -> 75s -- on a weak/slow connection the page itself
-// (not just this app's own tap/click retries) can simply take longer to
-// load and settle between steps, and the old 55s ceiling could time out an
-// attempt that was still genuinely in progress, reporting it as a false
-// "timed out" failure. This only affects how long a stuck attempt is
-// allowed to keep trying before giving up -- it does not slow down any
-// attempt that finishes normally.
-const val ATTEMPT_TIMEOUT_MS = 35_000L
+// Round 55: shortened to 15s by request. This is the give-up clock for a
+// single attempt -- how long it's allowed to sit before being called a
+// TimedOut, which in a partially-automated batch (page filled, waiting on a
+// human to tap Sign In) is really "how long to wait for that tap before
+// moving on." 15s keeps the batch moving instead of parking 75s on any
+// credential nobody taps. (Prior: Round 48p had bumped 55s -> 75s to avoid
+// timing out slow-connection page loads that were still genuinely in
+// progress; with a human deciding each tap, that long ceiling isn't needed
+// -- and the Pause button, Round 54, is the right tool for a real
+// wait-for-network/battery/human gap, rather than a long per-attempt timer.)
+// This only affects how long a stuck attempt waits before giving up; it
+// does not slow down any attempt that finishes normally.
+const val ATTEMPT_TIMEOUT_MS = 15_000L
 const val INSPECT_INTERVAL_MS = 1200L
 const val SUBMIT_SETTLE_MS = 2500L
 const val TAP_SETTLE_MS = 1800L
@@ -109,14 +114,14 @@ fun inspectAndActScript(username: String, password: String): String {
             var acceptCookies = findButtonByText(['accept all cookies', 'accept all', 'accept cookies']);
             if (acceptCookies) {
                 var c1 = centerOf(acceptCookies);
-                return JSON.stringify({status: 'need_tap_cookies', url: window.location.href, x: c1.x, y: c1.y, vw: window.innerWidth, vh: window.innerHeight});
+                return JSON.stringify({status: 'need_tap_cookies', url: window.location.href, x: c1.x, y: c1.y});
             }
 
             // Priority 2: the "Please complete your profile" popup.
             var askLater = findButtonByText(['ask again tomorrow']);
             if (askLater) {
                 var c2 = centerOf(askLater);
-                return JSON.stringify({status: 'need_tap_popup', url: window.location.href, x: c2.x, y: c2.y, vw: window.innerWidth, vh: window.innerHeight});
+                return JSON.stringify({status: 'need_tap_popup', url: window.location.href, x: c2.x, y: c2.y});
             }
 
             // uptodate.com's login page has turned out to vary: sometimes a
@@ -179,7 +184,7 @@ fun inspectAndActScript(username: String, password: String): String {
                         return JSON.stringify({status: 'need_key_signin', url: window.location.href});
                     }
                     var retryC = centerOf(stillThere);
-                    return JSON.stringify({status: 'need_tap_signin', url: window.location.href, x: retryC.x + 6, y: retryC.y + 6, vw: window.innerWidth, vh: window.innerHeight});
+                    return JSON.stringify({status: 'need_tap_signin', url: window.location.href, x: retryC.x + 6, y: retryC.y + 6});
                 }
                 var userReady = !userField || !!userField.value;
                 if (userField && !userField.value) {
@@ -210,7 +215,7 @@ fun inspectAndActScript(username: String, password: String): String {
                         window.__utdSignInTapRequested = true;
                         window.__utdSignInAttempts = 1;
                         var c3 = centerOf(signInBtn);
-                        return JSON.stringify({status: 'need_tap_signin', url: window.location.href, x: c3.x, y: c3.y, vw: window.innerWidth, vh: window.innerHeight});
+                        return JSON.stringify({status: 'need_tap_signin', url: window.location.href, x: c3.x, y: c3.y});
                     }
                     // Button not found yet this poll (page may still be
                     // settling) -- don't latch, try again next poll.
@@ -254,7 +259,7 @@ fun inspectAndActScript(username: String, password: String): String {
                         return JSON.stringify({status: 'need_key_continue', url: window.location.href});
                     }
                     var retryC4 = centerOf(continueStillThere);
-                    return JSON.stringify({status: 'need_tap_continue', url: window.location.href, x: retryC4.x + 6, y: retryC4.y + 6, vw: window.innerWidth, vh: window.innerHeight});
+                    return JSON.stringify({status: 'need_tap_continue', url: window.location.href, x: retryC4.x + 6, y: retryC4.y + 6});
                 }
                 // First time reaching this step: blur whatever's focused
                 // (closes the keyboard the .focus() fill just opened) and
@@ -274,7 +279,7 @@ fun inspectAndActScript(username: String, password: String): String {
                     window.__utdContinueTapRequested = true;
                     window.__utdContinueAttempts = 1;
                     var c4 = centerOf(continueBtn);
-                    return JSON.stringify({status: 'need_tap_continue', url: window.location.href, x: c4.x, y: c4.y, vw: window.innerWidth, vh: window.innerHeight});
+                    return JSON.stringify({status: 'need_tap_continue', url: window.location.href, x: c4.x, y: c4.y});
                 }
                 return JSON.stringify({status: 'submitted_username', url: window.location.href});
             }
@@ -302,9 +307,7 @@ data class InspectResult(
     val url: String?,
     val errorHit: String?,
     val tapX: Double?,
-    val tapY: Double?,
-    val viewportWidth: Double?,
-    val viewportHeight: Double?
+    val tapY: Double?
 )
 
 fun interpretInspectResult(raw: String?): InspectResult {
@@ -322,9 +325,7 @@ fun interpretInspectResult(raw: String?): InspectResult {
         url = json?.optString("url")?.takeIf { it.isNotBlank() },
         errorHit = json?.optString("errorHit")?.takeIf { it.isNotBlank() && it != "null" },
         tapX = json?.let { if (it.has("x")) it.optDouble("x") else null }?.takeIf { !it.isNaN() },
-        tapY = json?.let { if (it.has("y")) it.optDouble("y") else null }?.takeIf { !it.isNaN() },
-        viewportWidth = json?.let { if (it.has("vw")) it.optDouble("vw") else null }?.takeIf { it > 0 && !it.isNaN() },
-        viewportHeight = json?.let { if (it.has("vh")) it.optDouble("vh") else null }?.takeIf { it > 0 && !it.isNaN() }
+        tapY = json?.let { if (it.has("y")) it.optDouble("y") else null }?.takeIf { !it.isNaN() }
     )
 }
 
@@ -382,34 +383,25 @@ fun statusLabelFor(status: String): String = when (status) {
  * a system-wide input-injection capability, so nothing extra needed to be
  * (or could have been) requested at install time.
  */
-fun nativeTap(view: WebView, cssX: Double, cssY: Double, viewportWidth: Double?, viewportHeight: Double?) {
-    // getScale() is NOT a CSS-pixel -> physical-pixel conversion. On many
-    // Android WebViews it is already reflected in how Chromium lays out the
-    // CSS viewport. Multiplying rect coordinates by view.scale therefore
-    // double-scales them (the observed tap lands at the far-right edge).
-    // Map the DOM viewport proportionally into the actual WebView view.
-    val vw = viewportWidth?.takeIf { it > 0.0 } ?: view.width.toDouble()
-    val vh = viewportHeight?.takeIf { it > 0.0 } ?: view.height.toDouble()
-    val x = (cssX * view.width / vw).toFloat().coerceIn(0f, view.width.toFloat() - 1f)
-    val y = (cssY * view.height / vh).toFloat().coerceIn(0f, view.height.toFloat() - 1f)
+fun nativeTap(view: WebView, cssX: Double, cssY: Double) {
+    val scale = if (view.scale > 0f) view.scale else 1f
+    val x = (cssX * scale).toFloat()
+    val y = (cssY * scale).toFloat()
     val downTime = SystemClock.uptimeMillis()
 
     val downEvent = MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, x, y, 0)
-    downEvent.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
     view.dispatchTouchEvent(downEvent)
     downEvent.recycle()
 
     view.postDelayed({
         val moveTime = SystemClock.uptimeMillis()
         val moveEvent = MotionEvent.obtain(downTime, moveTime, MotionEvent.ACTION_MOVE, x + 1f, y + 1f, 0)
-        moveEvent.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
         view.dispatchTouchEvent(moveEvent)
         moveEvent.recycle()
 
         view.postDelayed({
             val upTime = SystemClock.uptimeMillis()
             val upEvent = MotionEvent.obtain(downTime, upTime, MotionEvent.ACTION_UP, x + 1f, y + 1f, 0)
-            upEvent.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
             view.dispatchTouchEvent(upEvent)
             upEvent.recycle()
         }, 40L)
@@ -430,24 +422,15 @@ fun nativeTap(view: WebView, cssX: Double, cssY: Double, viewportWidth: Double?,
  * case exactly as before this round, so nothing regresses when the admin
  * hasn't turned the Accessibility Service on.
  */
-fun accessibilityTap(
-    view: WebView,
-    cssX: Double,
-    cssY: Double,
-    viewportWidth: Double?,
-    viewportHeight: Double?
-): Boolean {
+fun accessibilityTap(view: WebView, cssX: Double, cssY: Double): Boolean {
     if (!com.healthdataet.utdcredentials.accessibility.UtdClickAccessibilityService.isActive()) return false
     return try {
-        val vw = viewportWidth?.takeIf { it > 0.0 } ?: view.width.toDouble()
-        val vh = viewportHeight?.takeIf { it > 0.0 } ?: view.height.toDouble()
-        val localX = (cssX * view.width / vw).toFloat().coerceIn(0f, view.width.toFloat() - 1f)
-        val localY = (cssY * view.height / vh).toFloat().coerceIn(0f, view.height.toFloat() - 1f)
+        val scale = if (view.scale > 0f) view.scale else 1f
         val loc = IntArray(2)
         view.getLocationOnScreen(loc)
-        com.healthdataet.utdcredentials.accessibility.UtdClickAccessibilityService.tapAtScreenPoint(
-            loc[0] + localX, loc[1] + localY
-        )
+        val screenX = loc[0] + (cssX * scale).toFloat()
+        val screenY = loc[1] + (cssY * scale).toFloat()
+        com.healthdataet.utdcredentials.accessibility.UtdClickAccessibilityService.tapAtScreenPoint(screenX, screenY)
     } catch (e: Exception) {
         false
     }
@@ -724,13 +707,11 @@ fun startLoginAutomation(
                     // turned the service on).
                     val signInLike = result.status == "need_tap_signin" || result.status == "need_key_signin"
                     val continueLike = result.status == "need_tap_continue" || result.status == "need_key_continue"
-                    // Round 50: coordinate tap is the primary mechanism for
-                    // Sign In / Continue. The accessibility node-click path can
-                    // report success even when the WebView page does not actually
-                    // submit, which leaves the login page stuck until timeout.
-                    // The coordinate mapping now uses the DOM viewport dimensions,
-                    // so it must be allowed to run first.
-                    val accessibilityHandled = false
+                    val accessibilityHandled = (signInLike || continueLike) &&
+                        com.healthdataet.utdcredentials.accessibility.UtdClickAccessibilityService.isActive() &&
+                        com.healthdataet.utdcredentials.accessibility.UtdClickAccessibilityService.clickButtonByText(
+                            if (signInLike) listOf("sign in", "log in", "submit") else listOf("continue", "next")
+                        )
 
                     // Round 49: appended to every status line so a screenshot
                     // during a stuck/timed-out attempt actually reveals which
@@ -745,13 +726,16 @@ fun startLoginAutomation(
                         onStatus(statusLabelFor(result.status) + mechanismTag)
                         poll(SUBMIT_SETTLE_MS)
                     } else if (result.status in tapStatuses && result.tapX != null && result.tapY != null) {
-                        // Round 52: use the corrected WebView coordinate tap FIRST.
-                        // Accessibility dispatchGesture() only reports that Android
-                        // accepted the gesture request; that does not prove the
-                        // WebView actually received the tap. Keep Accessibility as
-                        // the fallback mechanism.
-                        nativeTap(view, result.tapX, result.tapY, result.viewportWidth, result.viewportHeight)
-                        mechanismTag = " [in-app tap]"
+                        // Round 49: try a real system-injected touch through
+                        // the Accessibility Service FIRST (see
+                        // accessibilityTap's doc comment) -- only falls back
+                        // to the in-process nativeTap when the service isn't
+                        // active or the OS didn't accept the gesture.
+                        val didAccessibilityTap = accessibilityTap(view, result.tapX, result.tapY)
+                        mechanismTag = if (didAccessibilityTap) " [accessibility: gesture tap]" else " [in-app tap]"
+                        if (!didAccessibilityTap) {
+                            nativeTap(view, result.tapX, result.tapY)
+                        }
                         onStatus(statusLabelFor(result.status) + mechanismTag)
                         val nextDelay = if (result.status == "need_tap_continue" || result.status == "need_tap_signin") {
                             SUBMIT_SETTLE_MS
