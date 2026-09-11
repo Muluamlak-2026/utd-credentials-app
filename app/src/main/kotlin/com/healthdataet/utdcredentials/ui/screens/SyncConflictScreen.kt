@@ -120,18 +120,34 @@ private fun ConflictCard(conflict: SyncConflict, onKeepMine: () -> Unit, onKeepT
                 style = MaterialTheme.typography.titleSmall)
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-            Text("Your offline version:", style = MaterialTheme.typography.labelMedium)
-            FieldRows(local)
+            // Round 58: an offline DELETE conflict has no field values to
+            // show for "your side" -- the local action itself was deleting
+            // the record, tagged _action="delete" by SyncRepository.
+            if (local.optString("_action") == "delete") {
+                Text(
+                    "You deleted this on your phone while offline.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error
+                )
+            } else {
+                Text("Your offline version:", style = MaterialTheme.typography.labelMedium)
+                FieldRows(local)
+            }
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
             Text("Current version on the site:", style = MaterialTheme.typography.labelMedium)
             FieldRows(server, excludeKeys = setOf("updated_at"))
 
+            val isDelete = local.optString("_action") == "delete"
             Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                OutlinedButton(onClick = onKeepTheirs) { Text("Keep site version") }
-                Button(onClick = onKeepMine) { Text("Keep mine") }
+                OutlinedButton(onClick = onKeepTheirs) {
+                    Text(if (isDelete) "Don't delete -- keep site version" else "Keep site version")
+                }
+                Button(onClick = onKeepMine) {
+                    Text(if (isDelete) "Delete anyway" else "Keep mine")
+                }
             }
         }
     }

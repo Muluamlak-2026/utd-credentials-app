@@ -135,6 +135,19 @@ fun OfflineCredentialsScreen(onBack: () -> Unit) {
                     editing = null
                     refreshTick++
                 }
+            },
+            // Round 58: offline delete -- same rule as OfflineUsersScreen's
+            // matching callback (see its comment for the full reasoning).
+            onDelete = {
+                scope.launch {
+                    if (editTarget.pendingCreate) {
+                        dao.delete(editTarget)
+                    } else {
+                        dao.update(editTarget.copy(pendingDelete = true, dirty = false))
+                    }
+                    editing = null
+                    refreshTick++
+                }
             }
         )
     }
@@ -162,12 +175,14 @@ fun OfflineCredentialsScreen(onBack: () -> Unit) {
 private fun CredentialEditDialog(
     initial: OfflineCredential?,
     onDismiss: () -> Unit,
-    onSave: (username: String, password: String, email: String?, notes: String?) -> Unit
+    onSave: (username: String, password: String, email: String?, notes: String?) -> Unit,
+    onDelete: (() -> Unit)? = null
 ) {
     var username by remember { mutableStateOf(initial?.username ?: "") }
     var password by remember { mutableStateOf(initial?.password ?: "") }
     var email by remember { mutableStateOf(initial?.email ?: "") }
     var notes by remember { mutableStateOf(initial?.notes ?: "") }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -195,6 +210,12 @@ private fun CredentialEditDialog(
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.padding(top = 8.dp)
                 )
+                if (onDelete != null) {
+                    TextButton(
+                        onClick = { showDeleteConfirm = true },
+                        modifier = Modifier.padding(top = 12.dp)
+                    ) { Text("Delete this credential", color = MaterialTheme.colorScheme.error) }
+                }
             }
         },
         confirmButton = {
@@ -205,4 +226,21 @@ private fun CredentialEditDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Delete this credential?") },
+            text = {
+                Text("This removes it here now, and on the site the next time this phone syncs. This can't be undone from the phone.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDeleteConfirm = false
+                    onDelete?.invoke()
+                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel") } }
+        )
+    }
 }

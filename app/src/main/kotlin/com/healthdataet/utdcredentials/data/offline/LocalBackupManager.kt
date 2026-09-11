@@ -67,6 +67,7 @@ object LocalBackupManager {
                     .put("baseUpdatedAt", u.baseUpdatedAt ?: JSONObject.NULL)
                     .put("dirty", u.dirty)
                     .put("pendingCreate", u.pendingCreate)
+                    .put("pendingDelete", u.pendingDelete)
                     .put("lastLocalEditAt", u.lastLocalEditAt))
             }
             val credsArr = JSONArray()
@@ -83,6 +84,7 @@ object LocalBackupManager {
                     .put("baseUpdatedAt", c.baseUpdatedAt ?: JSONObject.NULL)
                     .put("dirty", c.dirty)
                     .put("pendingCreate", c.pendingCreate)
+                    .put("pendingDelete", c.pendingDelete)
                     .put("lastLocalEditAt", c.lastLocalEditAt))
             }
 
@@ -151,6 +153,7 @@ object LocalBackupManager {
                     baseUpdatedAt = if (u.isNull("baseUpdatedAt")) null else u.optString("baseUpdatedAt"),
                     dirty = u.optBoolean("dirty"),
                     pendingCreate = u.optBoolean("pendingCreate"),
+                    pendingDelete = u.optBoolean("pendingDelete"),
                     lastLocalEditAt = u.optLong("lastLocalEditAt"),
                 ))
             }
@@ -171,6 +174,7 @@ object LocalBackupManager {
                     baseUpdatedAt = if (c.isNull("baseUpdatedAt")) null else c.optString("baseUpdatedAt"),
                     dirty = c.optBoolean("dirty"),
                     pendingCreate = c.optBoolean("pendingCreate"),
+                    pendingDelete = c.optBoolean("pendingDelete"),
                     lastLocalEditAt = c.optLong("lastLocalEditAt"),
                 ))
             }

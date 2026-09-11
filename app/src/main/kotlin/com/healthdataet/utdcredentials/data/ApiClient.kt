@@ -1,6 +1,7 @@
 package com.healthdataet.utdcredentials.data
 
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -153,4 +154,88 @@ class ApiClient(private val baseUrl: String) {
         val body = JSONObject().put("changes", changes)
         return post("/api/v1/sync/push", body, token)
     }
+
+    // ========================
+    // Round 58: full site backup/restore (reuses the web admin panel's
+    // existing Round 25 backup engine server-side -- see
+    // admin/api_routes.py's /backup/download and /backup/restore-database)
+    // ========================
+
+    /** Downloads a backup zip built from exactly the pieces selected --
+     * raw bytes, not the usual {"ok":...} JSON envelope, since this
+     * streams a zip file. [error] is set (and [bytes] null) on any
+     * failure, including a JSON {"ok":false,"error":...} the server sends
+     * back for something like "select at least one thing to back up". */
+    fun downloadBackup(
+        token: String,
+        includeUsers: Boolean,
+        includeCredentials: Boolean,
+        includeDatabase: Boolean,
+        includeCode: Boolean
+    ): BinaryResult {
+        val query = "users=${if (includeUsers) 1 else 0}" +
+            "&credentials=${if (includeCredentials) 1 else 0}" +
+            "&database=${if (includeDatabase) 1 else 0}" +
+            "&code=${if (includeCode) 1 else 0}"
+        return try {
+            val request = Request.Builder()
+                .url(baseUrl.trimEnd('/') + "/api/v1/backup/download?$query")
+                .addHeader("Authorization", "Bearer $token")
+                .get()
+                .build()
+            client.newCall(request).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    BinaryResult(resp.body?.bytes(), null)
+                } else {
+                    val text = resp.body?.string().orEmpty()
+                    val msg = try {
+                        JSONObject(text).optString("error").ifBlank { "Backup download failed" }
+                    } catch (e: Exception) {
+                        "Backup download failed (HTTP ${resp.code})"
+                    }
+                    BinaryResult(null, msg)
+                }
+            }
+        } catch (e: IOException) {
+            BinaryResult(null, e.message ?: "Network error")
+        } catch (e: Exception) {
+            BinaryResult(null, e.message ?: "Unexpected error")
+        }
+    }
+
+    /** Restores ONLY the database from a .sql dump's raw bytes (e.g. one
+     * extracted from a zip [downloadBackup] previously stored) -- a
+     * multipart upload matching exactly what /backup/restore-database
+     * expects: confirm=RESTORE (the server refuses without it) + the file
+     * itself. Requires the caller to have already gotten the admin's
+     * explicit, typed confirmation -- this makes the actual destructive
+     * call the instant it's invoked, no further confirmation here. */
+    fun restoreDatabase(token: String, sqlBytes: ByteArray): ApiResult {
+        return try {
+            val body = MultipartBody.Builder().setType(MultipartBody.FORM)
+                .addFormDataPart("confirm", "RESTORE")
+                .addFormDataPart(
+                    "sql_file", "full_database_dump.sql",
+                    sqlBytes.toRequestBody("application/sql".toMediaType())
+                )
+                .build()
+            val request = Request.Builder()
+                .url(baseUrl.trimEnd('/') + "/api/v1/backup/restore-database")
+                .addHeader("Authorization", "Bearer $token")
+                .post(body)
+                .build()
+            client.newCall(request).execute().use { resp ->
+                parse(resp.body?.string().orEmpty(), resp.isSuccessful)
+            }
+        } catch (e: IOException) {
+            ApiResult(false, null, e.message ?: "Network error")
+        } catch (e: Exception) {
+            ApiResult(false, null, e.message ?: "Unexpected error")
+        }
+    }
 }
+
+/** Result of a raw (non-JSON) download -- [downloadBackup] streams a zip
+ * file, not the usual {"ok":...} envelope every other ApiClient call
+ * parses. */
+class BinaryResult(val bytes: ByteArray?, val error: String?)

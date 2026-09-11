@@ -19,6 +19,7 @@ import com.healthdataet.utdcredentials.data.SessionManager
 import com.healthdataet.utdcredentials.ui.screens.AppSettingsScreen
 import com.healthdataet.utdcredentials.ui.screens.CrashLogScreen
 import com.healthdataet.utdcredentials.ui.screens.CredentialPickerScreen
+import com.healthdataet.utdcredentials.ui.screens.FullBackupScreen
 import com.healthdataet.utdcredentials.ui.screens.FullSiteScreen
 import com.healthdataet.utdcredentials.ui.screens.LockScreen
 import com.healthdataet.utdcredentials.ui.screens.LocalBackupScreen
@@ -57,6 +58,9 @@ private const val ROUTE_LOCAL_BACKUP = "local_backup"
 private const val ROUTE_OFFLINE_USERS = "offline_users"
 private const val ROUTE_OFFLINE_CREDENTIALS = "offline_credentials"
 private const val ROUTE_SYNC_CONFLICTS = "sync_conflicts"
+// Round 58: server-backed selective backup (Users/Credentials/Database/
+// Code), separate from the lightweight local JSON snapshot above.
+private const val ROUTE_FULL_BACKUP = "full_backup"
 
 /** Round 47b: how long the app stays unlocked after being backgrounded
  * (switched to another app, or minimized) before the lock gate re-arms.
@@ -159,7 +163,8 @@ fun AppNavHost() {
                         popUpTo(ROUTE_SITE) { inclusive = true }
                     }
                 },
-                onOpenAppSettings = { navController.navigate(ROUTE_APP_SETTINGS) }
+                onOpenAppSettings = { navController.navigate(ROUTE_APP_SETTINGS) },
+                onOpenOfflineData = { navController.navigate(ROUTE_LOCAL_BACKUP) }
             )
         }
         composable(ROUTE_APP_SETTINGS) {
@@ -204,7 +209,8 @@ fun AppNavHost() {
                 onBack = { navController.popBackStack() },
                 onOpenUsers = { navController.navigate(ROUTE_OFFLINE_USERS) },
                 onOpenCredentials = { navController.navigate(ROUTE_OFFLINE_CREDENTIALS) },
-                onOpenConflicts = { navController.navigate(ROUTE_SYNC_CONFLICTS) }
+                onOpenConflicts = { navController.navigate(ROUTE_SYNC_CONFLICTS) },
+                onOpenFullBackup = { navController.navigate(ROUTE_FULL_BACKUP) }
             )
         }
         composable(ROUTE_OFFLINE_USERS) {
@@ -215,6 +221,9 @@ fun AppNavHost() {
         }
         composable(ROUTE_SYNC_CONFLICTS) {
             SyncConflictScreen(onBack = { navController.popBackStack() })
+        }
+        composable(ROUTE_FULL_BACKUP) {
+            FullBackupScreen(onBack = { navController.popBackStack() })
         }
     }
 }

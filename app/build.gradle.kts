@@ -435,8 +435,30 @@ android {
         // while fully disconnected, sync-with-conflict-prompt on reconnect,
         // and an on-device local backup file -- see data/offline/ and the
         // new Local Backup screen off App Settings.
-        versionCode = 34
-        versionName = "1.4.28"
+        // Round 58: (1) offline DELETE added to Offline Users/Credentials
+        // (Round 57 deliberately left this out; now added per explicit
+        // admin request), with the same conflict-check/prompt as an edit --
+        // see OfflineEntities.kt's pendingDelete, SyncRepository.kt's
+        // delete handling, and admin/api_routes.py's matching server-side
+        // delete branches. (2) New Full Site Backup screen (server-backed,
+        // separate from the existing lightweight Local Backup) -- pick
+        // Users/Credentials/Database/Code, any combination, downloaded via
+        // new /api/v1/backup/* routes that reuse the web admin panel's own
+        // Round 25 backup/restore engine (no new backup logic anywhere);
+        // the stored file is encrypted at rest (Android Keystore) since it
+        // can contain the full database and, if selected, the site's
+        // source code. Only the database piece is restorable from the
+        // phone -- see FullSiteBackupManager.kt's doc comment for why code
+        // restore isn't offered (the web panel doesn't support that
+        // either). (3) A persistent "You're offline -- Edit Offline"
+        // banner now shows over the live admin panel WebView itself
+        // whenever the phone has no connection (data/offline/
+        // NetworkStatus.kt), plus an "Edit Offline Instead" link on the
+        // existing "can't reach the admin panel" fallback page -- both
+        // jump straight to the native offline screens without touching
+        // the site's own HTML/JS at all.
+        versionCode = 35
+        versionName = "1.4.29"
         buildConfigField("String", "GIT_SHA", "\"${gitShaForBuild()}\"")
     }
 

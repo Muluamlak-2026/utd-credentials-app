@@ -59,6 +59,7 @@ fun LocalBackupScreen(
     onOpenUsers: () -> Unit,
     onOpenCredentials: () -> Unit,
     onOpenConflicts: () -> Unit,
+    onOpenFullBackup: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -161,7 +162,24 @@ fun LocalBackupScreen(
 
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Local Backup", style = MaterialTheme.typography.titleMedium)
+                    Text("Full Site Backup (Server)", style = MaterialTheme.typography.titleMedium)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        "Round 58: pick Users, Credentials, the full database SQL dump, and/or the site's source code -- any combination -- download it from the site's own backup system, and restore the database piece straight back.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedButton(onClick = onOpenFullBackup, modifier = Modifier.fillMaxWidth()) {
+                        Text("Open Full Site Backup")
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Local Backup (this device's offline data)", style = MaterialTheme.typography.titleMedium)
                     Spacer(modifier = Modifier.height(4.dp))
                     val info = backupInfo
                     Text(

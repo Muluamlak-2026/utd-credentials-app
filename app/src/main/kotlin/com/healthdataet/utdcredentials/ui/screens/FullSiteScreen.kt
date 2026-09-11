@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -47,6 +48,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -75,6 +77,7 @@ import com.healthdataet.utdcredentials.data.PendingWebLogin
 import com.healthdataet.utdcredentials.data.PollIntervalPrefs
 import com.healthdataet.utdcredentials.data.SessionManager
 import com.healthdataet.utdcredentials.data.SiteCredsStore
+import com.healthdataet.utdcredentials.data.offline.rememberIsOnline
 import com.healthdataet.utdcredentials.push.NotificationChannels
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -105,9 +108,17 @@ import org.json.JSONArray
 fun FullSiteScreen(
     session: SessionManager,
     onLoggedOut: () -> Unit,
-    onOpenAppSettings: () -> Unit
+    onOpenAppSettings: () -> Unit,
+    onOpenOfflineData: () -> Unit
 ) {
     val context = LocalContext.current
+    // Round 58: per the admin's explicit request to reach offline add/
+    // edit/delete straight from "the already existing working panels" --
+    // this is the real, live admin site shown in the WebView below, so a
+    // persistent native banner (driven by actual connectivity, not just
+    // the WebView's own load-failure state) is what surfaces the offline
+    // screens from here without touching the site's own HTML/JS at all.
+    val isOnline by rememberIsOnline()
     val siteCredsStore = remember { SiteCredsStore(context) }
     val scope = rememberCoroutineScope()
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
@@ -439,6 +450,22 @@ fun FullSiteScreen(
                         }
                     }
                     webViewClient = object : WebViewClient() {
+                        // Round 58: the only special URL this WebView ever
+                        // needs to intercept -- the "Edit Offline Instead"
+                        // link on connectionErrorHtml's fallback page below,
+                        // which uses this made-up scheme specifically so it
+                        // can never be mistaken for a real site URL to load.
+                        override fun shouldOverrideUrlLoading(
+                            view: WebView,
+                            request: WebResourceRequest
+                        ): Boolean {
+                            if (request.url?.toString() == "utdapp://offline") {
+                                onOpenOfflineData()
+                                return true
+                            }
+                            return false
+                        }
+
                         override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
                             super.onPageStarted(view, url, favicon)
                             isPageLoading = true
@@ -570,6 +597,37 @@ fun FullSiteScreen(
                     .align(Alignment.TopCenter)
             )
         }
+        // Round 58: persistent offline banner, independent of whatever the
+        // WebView itself is currently showing (a cached page can keep
+        // displaying just fine even with no connection at all) -- driven
+        // purely by rememberIsOnline's real connectivity check.
+        AnimatedVisibility(
+            visible = !isOnline,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = expandVertically(),
+            exit = shrinkVertically()
+        ) {
+            Surface(
+                tonalElevation = 4.dp,
+                color = MaterialTheme.colorScheme.errorContainer,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .windowInsetsPadding(WindowInsets.navigationBars)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        "You're offline",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                    Button(onClick = onOpenOfflineData) { Text("Edit Offline") }
+                }
+            }
+        }
         }
     }
 
@@ -685,6 +743,9 @@ private fun connectionErrorHtml(retryUrl: String, detail: String?): String {
             </p>
             <a href="$retryUrl" style="display:inline-block;padding:12px 28px;background:#6366F1;
                 color:#fff;text-decoration:none;border-radius:8px;font-weight:bold;">Retry</a>
+            <p style="margin:20px 0 0;">
+                <a href="utdapp://offline" style="color:#6366F1;font-weight:bold;">Edit Offline Instead</a>
+            </p>
         </body>
         </html>
     """.trimIndent()

@@ -139,6 +139,23 @@ fun OfflineUsersScreen(onBack: () -> Unit) {
                     editing = null
                     refreshTick++
                 }
+            },
+            // Round 58: offline delete, added per explicit admin request
+            // (Round 57 deliberately left this out). A row never yet synced
+            // (pendingCreate) has nothing on the server to delete -- just
+            // remove it here and now; anything else is hidden immediately
+            // and queued for the actual server-side delete on next sync
+            // (see SyncRepository.pushPending).
+            onDelete = {
+                scope.launch {
+                    if (editTarget.pendingCreate) {
+                        dao.delete(editTarget)
+                    } else {
+                        dao.update(editTarget.copy(pendingDelete = true, dirty = false))
+                    }
+                    editing = null
+                    refreshTick++
+                }
             }
         )
     }
@@ -166,11 +183,13 @@ fun OfflineUsersScreen(onBack: () -> Unit) {
 private fun UserEditDialog(
     initial: OfflineUser?,
     onDismiss: () -> Unit,
-    onSave: (fullName: String, phone: String, notes: String?) -> Unit
+    onSave: (fullName: String, phone: String, notes: String?) -> Unit,
+    onDelete: (() -> Unit)? = null
 ) {
     var fullName by remember { mutableStateOf(initial?.fullName ?: "") }
     var phone by remember { mutableStateOf(initial?.phone ?: "") }
     var notes by remember { mutableStateOf(initial?.notes ?: "") }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -194,6 +213,15 @@ private fun UserEditDialog(
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.padding(top = 8.dp)
                 )
+                // Round 58: offline delete -- only offered when editing an
+                // existing row (there's nothing to delete on a not-yet-saved
+                // "Add User" dialog).
+                if (onDelete != null) {
+                    TextButton(
+                        onClick = { showDeleteConfirm = true },
+                        modifier = Modifier.padding(top = 12.dp)
+                    ) { Text("Delete this user", color = MaterialTheme.colorScheme.error) }
+                }
             }
         },
         confirmButton = {
@@ -204,4 +232,21 @@ private fun UserEditDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Delete this user?") },
+            text = {
+                Text("This removes them here now, and on the site the next time this phone syncs. This can't be undone from the phone.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDeleteConfirm = false
+                    onDelete?.invoke()
+                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel") } }
+        )
+    }
 }

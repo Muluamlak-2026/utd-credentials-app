@@ -13,7 +13,11 @@ import androidx.room.PrimaryKey
  * the next push (see admin/api_routes.py's sync_push doc comment for the
  * full reasoning). [dirty] marks a row with local edits not yet
  * successfully pushed; [pendingCreate] marks a row that was created
- * offline and has no server counterpart yet.
+ * offline and has no server counterpart yet. [pendingDelete] (Round 58)
+ * marks a row deleted offline that still needs deleting on the server too;
+ * it's excluded from every list the moment it's set (see OfflineDao's
+ * getAll queries), so it disappears from the screen immediately even
+ * though the row itself still exists locally until sync actually removes it.
  */
 @Entity(tableName = "offline_users")
 data class OfflineUser(
@@ -29,6 +33,7 @@ data class OfflineUser(
     val baseUpdatedAt: String? = null,
     val dirty: Boolean = false,
     val pendingCreate: Boolean = false,
+    val pendingDelete: Boolean = false,
     val lastLocalEditAt: Long = 0L,
 )
 
@@ -47,6 +52,7 @@ data class OfflineCredential(
     val baseUpdatedAt: String? = null,
     val dirty: Boolean = false,
     val pendingCreate: Boolean = false,
+    val pendingDelete: Boolean = false,
     val lastLocalEditAt: Long = 0L,
 )
 

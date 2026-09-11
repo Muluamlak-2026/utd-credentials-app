@@ -9,7 +9,10 @@ import androidx.room.Update
 
 @Dao
 interface OfflineUserDao {
-    @Query("SELECT * FROM offline_users ORDER BY fullName")
+    // Round 58: WHERE pendingDelete = 0 -- a row marked for offline deletion
+    // disappears from the list immediately, even though it still physically
+    // exists in this table until the delete actually syncs to the server.
+    @Query("SELECT * FROM offline_users WHERE pendingDelete = 0 ORDER BY fullName")
     suspend fun getAll(): List<OfflineUser>
 
     @Query("SELECT * FROM offline_users WHERE localId = :localId LIMIT 1")
@@ -18,7 +21,7 @@ interface OfflineUserDao {
     @Query("SELECT * FROM offline_users WHERE serverId = :serverId LIMIT 1")
     suspend fun getByServerId(serverId: Int): OfflineUser?
 
-    @Query("SELECT * FROM offline_users WHERE dirty = 1 OR pendingCreate = 1")
+    @Query("SELECT * FROM offline_users WHERE dirty = 1 OR pendingCreate = 1 OR pendingDelete = 1")
     suspend fun getPending(): List<OfflineUser>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -39,7 +42,7 @@ interface OfflineUserDao {
 
 @Dao
 interface OfflineCredentialDao {
-    @Query("SELECT * FROM offline_credentials ORDER BY username")
+    @Query("SELECT * FROM offline_credentials WHERE pendingDelete = 0 ORDER BY username")
     suspend fun getAll(): List<OfflineCredential>
 
     @Query("SELECT * FROM offline_credentials WHERE localId = :localId LIMIT 1")
@@ -48,7 +51,7 @@ interface OfflineCredentialDao {
     @Query("SELECT * FROM offline_credentials WHERE serverId = :serverId LIMIT 1")
     suspend fun getByServerId(serverId: Int): OfflineCredential?
 
-    @Query("SELECT * FROM offline_credentials WHERE dirty = 1 OR pendingCreate = 1")
+    @Query("SELECT * FROM offline_credentials WHERE dirty = 1 OR pendingCreate = 1 OR pendingDelete = 1")
     suspend fun getPending(): List<OfflineCredential>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
