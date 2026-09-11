@@ -3,6 +3,9 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.gms.google-services")
+    // Round 57: Room's compiler (generates OfflineDatabase's DAO
+    // implementations at build time).
+    id("com.google.devtools.ksp")
 }
 
 // Round 48e: a real, on-device way to prove which commit is actually
@@ -428,8 +431,12 @@ android {
         // quickly from any credential that isn't tapped, instead of parking
         // 75s on it. Both changes fold into this single build/deploy; no
         // existing feature removed.
-        versionCode = 33
-        versionName = "1.4.27"
+        // Round 57: offline users/credentials database (Room), add/edit
+        // while fully disconnected, sync-with-conflict-prompt on reconnect,
+        // and an on-device local backup file -- see data/offline/ and the
+        // new Local Backup screen off App Settings.
+        versionCode = 34
+        versionName = "1.4.28"
         buildConfigField("String", "GIT_SHA", "\"${gitShaForBuild()}\"")
     }
 
@@ -540,4 +547,12 @@ dependencies {
     // Talks to the panel's existing /api/v1 JSON API (admin/api_routes.py)
     // for login + push device-token registration + notification polling.
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // Round 57: local offline database (users/credentials mirror + pending
+    // sync queue + conflict records) for the new Offline Data / Local
+    // Backup feature. room-ktx adds Kotlin coroutine (suspend fun DAO
+    // methods) support on top of plain room-runtime.
+    implementation("androidx.room:room-runtime:2.6.1")
+    implementation("androidx.room:room-ktx:2.6.1")
+    ksp("androidx.room:room-compiler:2.6.1")
 }

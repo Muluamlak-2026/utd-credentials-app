@@ -133,4 +133,24 @@ class ApiClient(private val baseUrl: String) {
         if (!reason.isNullOrBlank()) body.put("reason", reason)
         return post("/api/v1/credentials/report-login-attempt", body, token)
     }
+
+    // ========================
+    // Round 57: offline data sync
+    // ========================
+
+    /** Full users snapshot, used to seed/refresh the offline local copy. */
+    fun syncPullUsers(token: String): ApiResult = getWithAuth("/api/v1/sync/users", token)
+
+    /** Full credentials snapshot -- same purpose as [syncPullUsers]. */
+    fun syncPullCredentials(token: String): ApiResult = getWithAuth("/api/v1/sync/credentials", token)
+
+    /** Pushes a batch of offline changes (see admin/api_routes.py's
+     * sync_push doc comment for the exact per-item shape this expects and
+     * returns). [changes] is a raw JSONObject array built by
+     * SyncRepository, since the item shape already varies by entity/op and
+     * is easiest to assemble where the local rows are actually read. */
+    fun syncPush(token: String, changes: org.json.JSONArray): ApiResult {
+        val body = JSONObject().put("changes", changes)
+        return post("/api/v1/sync/push", body, token)
+    }
 }

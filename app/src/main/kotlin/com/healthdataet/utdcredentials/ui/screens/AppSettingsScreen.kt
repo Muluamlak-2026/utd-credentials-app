@@ -52,7 +52,8 @@ fun AppSettingsScreen(
     onOpenNotifications: () -> Unit,
     onOpenSecurity: () -> Unit,
     onOpenDiagnostics: () -> Unit,
-    onOpenCredentialLogin: () -> Unit
+    onOpenCredentialLogin: () -> Unit,
+    onOpenOfflineData: () -> Unit
 ) {
     val context = LocalContext.current
     val appearancePrefs = remember { AppearancePrefs(context) }
@@ -108,6 +109,17 @@ fun AppSettingsScreen(
                 subtitle = "Pick a stored credential and log straight into uptodate.com, " +
                     "auto-filled -- or run several in sequence with a pass/fail report",
                 onClick = onOpenCredentialLogin
+            )
+            HorizontalDivider()
+            // Round 57: view/add/edit users & credentials fully offline,
+            // with automatic sync (and, when the same record changed both
+            // places, a conflict prompt) once back online -- plus the
+            // on-device local backup.
+            SettingsLinkRow(
+                title = "Offline Data & Local Backup",
+                subtitle = "Add or edit users/credentials with no connection, auto-sync on " +
+                    "reconnect, and a one-file local backup on this phone",
+                onClick = onOpenOfflineData
             )
             HorizontalDivider()
 

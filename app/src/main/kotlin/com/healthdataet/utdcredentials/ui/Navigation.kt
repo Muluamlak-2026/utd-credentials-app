@@ -21,9 +21,13 @@ import com.healthdataet.utdcredentials.ui.screens.CrashLogScreen
 import com.healthdataet.utdcredentials.ui.screens.CredentialPickerScreen
 import com.healthdataet.utdcredentials.ui.screens.FullSiteScreen
 import com.healthdataet.utdcredentials.ui.screens.LockScreen
+import com.healthdataet.utdcredentials.ui.screens.LocalBackupScreen
 import com.healthdataet.utdcredentials.ui.screens.LoginHistoryScreen
 import com.healthdataet.utdcredentials.ui.screens.LoginScreen
+import com.healthdataet.utdcredentials.ui.screens.OfflineCredentialsScreen
+import com.healthdataet.utdcredentials.ui.screens.OfflineUsersScreen
 import com.healthdataet.utdcredentials.ui.screens.SecuritySettingsScreen
+import com.healthdataet.utdcredentials.ui.screens.SyncConflictScreen
 import com.healthdataet.utdcredentials.ui.screens.SequentialLoginScreen
 import com.healthdataet.utdcredentials.ui.screens.SoundSettingsScreen
 import com.healthdataet.utdcredentials.ui.screens.UpToDateLoginScreen
@@ -47,6 +51,12 @@ private const val ROUTE_SEQUENTIAL_LOGIN = "sequential_login"
 // ever made (separate from the website Hub's per-credential Sign-In Test
 // column) -- reached via a History icon on the credential picker's top bar.
 private const val ROUTE_LOGIN_HISTORY = "login_history"
+// Round 57: offline users/credentials store + local backup, reached from
+// App Settings.
+private const val ROUTE_LOCAL_BACKUP = "local_backup"
+private const val ROUTE_OFFLINE_USERS = "offline_users"
+private const val ROUTE_OFFLINE_CREDENTIALS = "offline_credentials"
+private const val ROUTE_SYNC_CONFLICTS = "sync_conflicts"
 
 /** Round 47b: how long the app stays unlocked after being backgrounded
  * (switched to another app, or minimized) before the lock gate re-arms.
@@ -158,7 +168,8 @@ fun AppNavHost() {
                 onOpenNotifications = { navController.navigate(ROUTE_SOUNDS) },
                 onOpenSecurity = { navController.navigate(ROUTE_SECURITY) },
                 onOpenDiagnostics = { navController.navigate(ROUTE_DIAGNOSTICS) },
-                onOpenCredentialLogin = { navController.navigate(ROUTE_CREDENTIAL_PICKER) }
+                onOpenCredentialLogin = { navController.navigate(ROUTE_CREDENTIAL_PICKER) },
+                onOpenOfflineData = { navController.navigate(ROUTE_LOCAL_BACKUP) }
             )
         }
         composable(ROUTE_SOUNDS) {
@@ -187,6 +198,23 @@ fun AppNavHost() {
         }
         composable(ROUTE_LOGIN_HISTORY) {
             LoginHistoryScreen(onBack = { navController.popBackStack() })
+        }
+        composable(ROUTE_LOCAL_BACKUP) {
+            LocalBackupScreen(
+                onBack = { navController.popBackStack() },
+                onOpenUsers = { navController.navigate(ROUTE_OFFLINE_USERS) },
+                onOpenCredentials = { navController.navigate(ROUTE_OFFLINE_CREDENTIALS) },
+                onOpenConflicts = { navController.navigate(ROUTE_SYNC_CONFLICTS) }
+            )
+        }
+        composable(ROUTE_OFFLINE_USERS) {
+            OfflineUsersScreen(onBack = { navController.popBackStack() })
+        }
+        composable(ROUTE_OFFLINE_CREDENTIALS) {
+            OfflineCredentialsScreen(onBack = { navController.popBackStack() })
+        }
+        composable(ROUTE_SYNC_CONFLICTS) {
+            SyncConflictScreen(onBack = { navController.popBackStack() })
         }
     }
 }
