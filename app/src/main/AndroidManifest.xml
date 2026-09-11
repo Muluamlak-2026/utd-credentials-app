@@ -24,12 +24,12 @@
     <!-- Round 57: the offline data feature's sync-on-reconnect runs as a
          genuine foreground service (a persistent notification while it's
          actively pushing/pulling), per the admin's explicit request for
-         reliable background sync -- these two permissions are both required
+         reliable background sync; these two permissions are both required
          for that: FOREGROUND_SERVICE is the general grant, and
          FOREGROUND_SERVICE_DATA_SYNC is the specific typed grant Android 14+
          (API 34) requires for a "sync data with a server" foreground service
          (untyped foreground services are rejected outright on API 34+).
-         Both are normal permissions, granted automatically at install --
+         Both are normal permissions, granted automatically at install;
          nothing for the admin to approve beyond installing the update. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
@@ -94,7 +94,7 @@
 
         <!-- Round 57: shows a persistent notification while an offline
              sync (pull + push of pending users/credentials changes) is
-             actively running -- started the moment connectivity returns
+             actively running; started the moment connectivity returns
              (see data/offline/ConnectivitySyncTrigger.kt) and by the
              periodic WorkManager backstop (push/SyncWorker.kt), and stops
              itself the instant that sync run finishes. dataSync is the
