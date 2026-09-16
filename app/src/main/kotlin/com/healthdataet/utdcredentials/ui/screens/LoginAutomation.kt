@@ -1,622 +1,363 @@
 package com.healthdataet.utdcredentials.ui.screens
 
+import android.accessibilityservice.AccessibilityService
 import android.content.Context
-import android.os.SystemClock
-import android.view.KeyEvent
-import android.view.MotionEvent
+import android.view.accessibility.AccessibilityNodeInfo
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.platform.LocalContext
 import android.webkit.WebView
-import com.healthdataet.utdcredentials.data.ApiClient
-import com.healthdataet.utdcredentials.data.LoginHistoryStore
-import com.healthdataet.utdcredentials.data.SessionManager
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import org.json.JSONObject
+import android.webkit.WebViewClient
+import android.view.MotionEvent
+import kotlinx.coroutines.*
 
-const val UPTODATE_LOGIN_URL = "https://www.uptodate.com/login"
-// Round 55: shortened to 15s by request. This is the give-up clock for a
-// single attempt -- how long it's allowed to sit before being called a
-// TimedOut, which in a partially-automated batch (page filled, waiting on a
-// human to tap Sign In) is really "how long to wait for that tap before
-// moving on." 15s keeps the batch moving instead of parking 75s on any
-// credential nobody taps. (Prior: Round 48p had bumped 55s -> 75s to avoid
-// timing out slow-connection page loads that were still genuinely in
-// progress; with a human deciding each tap, that long ceiling isn't needed
-// -- and the Pause button, Round 54, is the right tool for a real
-// wait-for-network/battery/human gap, rather than a long per-attempt timer.)
-// This only affects how long a stuck attempt waits before giving up; it
-// does not slow down any attempt that finishes normally.
-const val ATTEMPT_TIMEOUT_MS = 20_000L
-const val INSPECT_INTERVAL_MS = 1200L
-const val SUBMIT_SETTLE_MS = 2500L
-const val TAP_SETTLE_MS = 1800L
-// How often to re-check while WATCHING for the keyboard-close reflow to
-// settle (isViewportStable() in the script) -- fast enough to notice the
-// instant it's actually done rather than trusting one blind fixed wait.
-const val SETTLE_POLL_MS = 350L
+private const val ATTEMPT_TIMEOUT_MS = 20_000L
+private const val SETTLE_POLL_MS = 350L
+private const val MAX_SETTLE_POLLS = 10
+private const val TAP_SETTLE_MS = 500L
 
-fun inspectAndActScript(username: String, password: String): String {
-    val escapedUser = username.replace("\\", "\\\\").replace("\"", "\\\"")
-    val escapedPass = password.replace("\\", "\\\\").replace("\"", "\\\"")
-    return """
-        (function() {
-            function visible(el) {
-                if (!el) return false;
-                var rect = el.getBoundingClientRect();
-                if (!(rect.width || rect.height)) return false;
-                if (el.offsetParent === null) return false;
-                var style = window.getComputedStyle(el);
-                if (!style) return true;
-                if (style.visibility === 'hidden') return false;
-                if (style.display === 'none') return false;
-                var opacity = parseFloat(style.opacity);
-                if (!isNaN(opacity) && opacity === 0) return false;
-                return true;
-            }
-
-            function findButtonByText(labels) {
-                var candidates = document.querySelectorAll(
-                    'button, a, input[type="button"], input[type="submit"], [role="button"]'
-                );
-                for (var i = 0; i < candidates.length; i++) {
-                    var el = candidates[i];
-                    if (!visible(el)) continue;
-                    var t = (el.innerText || el.value || el.getAttribute('aria-label') || '')
-                        .trim().toLowerCase();
-                    for (var j = 0; j < labels.length; j++) {
-                        if (t.indexOf(labels[j]) !== -1) { return el; }
-                    }
-                }
-                return null;
-            }
-
-            function centerOf(el) {
-                var rect = el.getBoundingClientRect();
-                return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-            }
-
-            // Filling a field with .focus() opens the real on-screen
-            // keyboard, which resizes/reflows the whole page -- reading a
-            // button's position before that settles is what made earlier
-            // taps land on stale coordinates. Rather than trusting one
-            // fixed guess at how long that takes, this actually WATCHES
-            // the viewport: it keeps polling (fast, every ~350ms) until
-            // the visual viewport height hasn't changed for two polls in a
-            // row (the keyboard animation is genuinely done), and gives up
-            // waiting after 10 polls (~3.5s) so a page that never quite
-            // settles can't stall the whole attempt forever.
-            function isViewportStable() {
-                var h = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-                window.__utdSettlePolls = (window.__utdSettlePolls || 0) + 1;
-                if (window.__utdLastViewportH === h) {
-                    window.__utdViewportStableCount = (window.__utdViewportStableCount || 0) + 1;
-                } else {
-                    window.__utdViewportStableCount = 0;
-                    window.__utdLastViewportH = h;
-                }
-                if (window.__utdViewportStableCount >= 2) return true;
-                if (window.__utdSettlePolls >= 10) return true;
-                return false;
-            }
-
-            // A plain element.click() (and even a synthetic
-            // pointerdown/mousedown/mouseup/click sequence dispatched from
-            // JS) turned out to do nothing on this page's real Sign
-            // In/Continue buttons -- their handler apparently only reacts
-            // to a genuinely trusted touch, which JS alone can never
-            // produce. So instead of clicking here, this script just finds
-            // the right button and reports its on-screen coordinates; the
-            // Android side then dispatches an actual native touch tap at
-            // that exact spot, indistinguishable from a real finger tap.
-
-            // Priority 1: the "Your Privacy" cookie-consent modal.
-            var acceptCookies = findButtonByText(['accept all cookies', 'accept all', 'accept cookies']);
-            if (acceptCookies) {
-                var c1 = centerOf(acceptCookies);
-                return JSON.stringify({status: 'need_tap_cookies', url: window.location.href, x: c1.x, y: c1.y});
-            }
-
-            // Priority 2: the "Please complete your profile" popup.
-            var askLater = findButtonByText(['ask again tomorrow']);
-            if (askLater) {
-                var c2 = centerOf(askLater);
-                return JSON.stringify({status: 'need_tap_popup', url: window.location.href, x: c2.x, y: c2.y});
-            }
-
-            // uptodate.com's login page has turned out to vary: sometimes a
-            // true two-step flow (username-only page, then a separate
-            // password-only page), and sometimes both fields on one page at
-            // once. Rather than assuming either shape, every poll looks at
-            // whatever fields actually exist right now and fills in
-            // whichever ones are empty -- this works for both shapes.
-            var userSelectors = [
-                'input[name="username"]', 'input#username',
-                'input[name="email"]', 'input#email',
-                'input[type="email"]',
-                'input[autocomplete="username"]',
-                'input[name="j_username"]'
-            ];
-            var userField = null;
-            for (var i = 0; i < userSelectors.length; i++) {
-                var candidate = document.querySelector(userSelectors[i]);
-                if (candidate && visible(candidate)) { userField = candidate; break; }
-            }
-            var passField = document.querySelector('input[type="password"]');
-            var passFieldUsable = passField && visible(passField);
-
-            if (passFieldUsable) {
-                // The password field is on screen -- this is the final
-                // step, whether or not a username field is showing
-                // alongside it on the same page.
-                var maxSignInAttempts = 3;
-                var signInAttempts = window.__utdSignInAttempts || 0;
-                if (window.__utdSignInTapRequested) {
-                    // A tap was already sent. Verify it actually had an
-                    // effect before deciding what to do next: if Sign In
-                    // is no longer findable, the page is most likely
-                    // already navigating -- just wait for the result. If
-                    // it's STILL sitting right there, the previous attempt
-                    // most likely never registered -- retry, up to
-                    // maxSignInAttempts total, rather than silently waiting
-                    // out the whole attempt timeout on a tap that never
-                    // landed.
-                    //
-                    // Round 48n: the retries no longer just repeat the same
-                    // coordinate tap -- attempt 2 switches to a completely
-                    // different, coordinate-free mechanism (focus the
-                    // button, then Android sends a real ENTER key event),
-                    // since a repeated identical tap is unlikely to succeed
-                    // where the first one already failed. Attempt 3 falls
-                    // back to a tap again, offset a few px from dead-center
-                    // in case an overlapping element (a hover/focus ring,
-                    // a sticky header) was intercepting the exact center.
-                    var stillThere = findButtonByText(['sign in', 'log in', 'submit']);
-                    if (!stillThere || signInAttempts >= maxSignInAttempts) {
-                        return JSON.stringify({status: 'waiting_password_result', url: window.location.href});
-                    }
-                    if (!isViewportStable()) {
-                        return JSON.stringify({status: 'settling_before_signin', url: window.location.href});
-                    }
-                    window.__utdSignInAttempts = signInAttempts + 1;
-                    if (signInAttempts === 1) {
-                        stillThere.focus();
-                        return JSON.stringify({status: 'need_key_signin', url: window.location.href});
-                    }
-                    var retryC = centerOf(stillThere);
-                    return JSON.stringify({status: 'need_tap_signin', url: window.location.href, x: retryC.x + 6, y: retryC.y + 6});
-                }
-                var userReady = !userField || !!userField.value;
-                if (userField && !userField.value) {
-                    userField.focus();
-                    userField.value = "$escapedUser";
-                    userField.dispatchEvent(new Event('input', { bubbles: true }));
-                    userField.dispatchEvent(new Event('change', { bubbles: true }));
-                    userReady = true;
-                }
-                if (passField.value !== "$escapedPass") {
-                    passField.focus();
-                    passField.value = "$escapedPass";
-                    passField.dispatchEvent(new Event('input', { bubbles: true }));
-                    passField.dispatchEvent(new Event('change', { bubbles: true }));
-                }
-                if (userReady && passField.value === "$escapedPass") {
-                    if (!window.__utdPasswordBlurred) {
-                        window.__utdPasswordBlurred = true;
-                        if (document.activeElement && document.activeElement.blur) {
-                            document.activeElement.blur();
-                        }
-                    }
-                    if (!isViewportStable()) {
-                        return JSON.stringify({status: 'settling_before_signin', url: window.location.href});
-                    }
-                    var signInBtn = findButtonByText(['sign in', 'log in', 'submit']);
-                    if (signInBtn) {
-                        window.__utdSignInTapRequested = true;
-                        window.__utdSignInAttempts = 1;
-                        var c3 = centerOf(signInBtn);
-                        return JSON.stringify({status: 'need_tap_signin', url: window.location.href, x: c3.x, y: c3.y});
-                    }
-                    // Button not found yet this poll (page may still be
-                    // settling) -- don't latch, try again next poll.
-                    return JSON.stringify({status: 'filling_password_step', url: window.location.href});
-                }
-                return JSON.stringify({status: 'filling_password_step', url: window.location.href});
-            }
-
-            if (userField && !userField.value) {
-                if (window.__utdContinueTapRequested) {
-                    return JSON.stringify({status: 'waiting_username_result', url: window.location.href});
-                }
-                userField.focus();
-                userField.value = "$escapedUser";
-                userField.dispatchEvent(new Event('input', { bubbles: true }));
-                userField.dispatchEvent(new Event('change', { bubbles: true }));
-                return JSON.stringify({status: 'settling_before_continue', url: window.location.href});
-            }
-
-            if (userField && userField.value === "$escapedUser") {
-                var maxContinueAttempts = 3;
-                var continueAttempts = window.__utdContinueAttempts || 0;
-                if (window.__utdContinueTapRequested) {
-                    // Same verify-then-retry pattern as Sign In above: if
-                    // Continue is no longer findable, the page is likely
-                    // already moving on -- wait. If it's still right
-                    // there, the previous attempt probably missed -- retry,
-                    // switching mechanism on attempt 2 (focus + native
-                    // ENTER key instead of another coordinate tap), up to
-                    // maxContinueAttempts.
-                    var continueStillThere = findButtonByText(['continue', 'next']);
-                    if (!continueStillThere || continueAttempts >= maxContinueAttempts) {
-                        return JSON.stringify({status: 'waiting_username_result', url: window.location.href});
-                    }
-                    if (!isViewportStable()) {
-                        return JSON.stringify({status: 'settling_before_continue', url: window.location.href});
-                    }
-                    window.__utdContinueAttempts = continueAttempts + 1;
-                    if (continueAttempts === 1) {
-                        continueStillThere.focus();
-                        return JSON.stringify({status: 'need_key_continue', url: window.location.href});
-                    }
-                    var retryC4 = centerOf(continueStillThere);
-                    return JSON.stringify({status: 'need_tap_continue', url: window.location.href, x: retryC4.x + 6, y: retryC4.y + 6});
-                }
-                // First time reaching this step: blur whatever's focused
-                // (closes the keyboard the .focus() fill just opened) and
-                // wait for the resulting reflow to genuinely settle before
-                // trusting Continue's on-screen position.
-                if (!window.__utdUsernameBlurred) {
-                    window.__utdUsernameBlurred = true;
-                    if (document.activeElement && document.activeElement.blur) {
-                        document.activeElement.blur();
-                    }
-                }
-                if (!isViewportStable()) {
-                    return JSON.stringify({status: 'settling_before_continue', url: window.location.href});
-                }
-                var continueBtn = findButtonByText(['continue', 'next']);
-                if (continueBtn) {
-                    window.__utdContinueTapRequested = true;
-                    window.__utdContinueAttempts = 1;
-                    var c4 = centerOf(continueBtn);
-                    return JSON.stringify({status: 'need_tap_continue', url: window.location.href, x: c4.x, y: c4.y});
-                }
-                return JSON.stringify({status: 'submitted_username', url: window.location.href});
-            }
-
-            var bodyText = (document.body ? document.body.innerText : '').toLowerCase();
-            var errorHit = null;
-            var needles = ['incorrect', 'invalid', 'does not match', 'try again', 'failed', 'locked out', 'error'];
-            for (var j = 0; j < needles.length; j++) {
-                if (bodyText.indexOf(needles[j]) !== -1) { errorHit = needles[j]; break; }
-            }
-            return JSON.stringify({status: 'final', url: window.location.href, errorHit: errorHit});
-        })();
-    """.trimIndent()
-}
-
-sealed class LoginAttemptOutcome {
-    object Success : LoginAttemptOutcome()
-    data class Failed(val reason: String) : LoginAttemptOutcome()
-    object TimedOut : LoginAttemptOutcome()
-    object Skipped : LoginAttemptOutcome()
-}
-
-data class InspectResult(
+data class LoginAttemptResult(
     val status: String,
-    val url: String?,
-    val errorHit: String?,
-    val tapX: Double?,
-    val tapY: Double?
+    val reason: String = "",
+    val timestamp: Long = System.currentTimeMillis()
 )
 
-fun interpretInspectResult(raw: String?): InspectResult {
-    val unwrapped = raw?.trim()
-        ?.removeSurrounding("\"")
-        ?.replace("\\\"", "\"")
-        ?.replace("\\\\", "\\")
-    val json = try {
-        if (!unwrapped.isNullOrBlank() && unwrapped != "null") JSONObject(unwrapped) else null
+suspend fun startLoginAutomation(
+    webView: WebView,
+    username: String,
+    password: String,
+    onStatusChange: (String) -> Unit,
+    onComplete: (LoginAttemptResult) -> Unit,
+    scope: CoroutineScope
+) {
+    val startTime = System.currentTimeMillis()
+
+    try {
+        onStatusChange("Starting login automation...")
+
+        onStatusChange("Filling username...")
+        fillField(webView, "username", username)
+        delay(TAP_SETTLE_MS)
+
+        onStatusChange("Checking for popups...")
+        val cookieResult = waitForAndHandlePopup(webView, "cookie")
+        if (cookieResult) {
+            delay(500)
+        }
+
+        val touResult = waitForAndHandlePopup(webView, "tou")
+        if (touResult) {
+            delay(500)
+        }
+
+        var continueAttempts = 0
+        while (continueAttempts < 2 && isTimeWithinLimit(startTime, ATTEMPT_TIMEOUT_MS)) {
+            val hasContinue = inspectAndAct(webView, onStatusChange)
+            if (hasContinue == "need_continue") {
+                onStatusChange("Clicking Continue button...")
+                delay(TAP_SETTLE_MS)
+                continueAttempts++
+            } else {
+                break
+            }
+            delay(SETTLE_POLL_MS)
+        }
+
+        onStatusChange("Filling password...")
+        fillField(webView, "password", password)
+        delay(TAP_SETTLE_MS)
+
+        onStatusChange("Submitting password...")
+        submitField(webView)
+        delay(500)
+
+        var signInAttempts = 0
+        while (signInAttempts < 3 && isTimeWithinLimit(startTime, ATTEMPT_TIMEOUT_MS)) {
+            val action = inspectAndAct(webView, onStatusChange)
+
+            when (action) {
+                "need_signin" -> {
+                    if (signInAttempts == 0) {
+                        onStatusChange("Clicking Sign In (native tap)...")
+                        val coords = getButtonCoordinates(webView, "Sign In|Login")
+                        if (coords != null) {
+                            nativeTap(webView, coords.first, coords.second)
+                        }
+                    } else if (signInAttempts == 1) {
+                        onStatusChange("Retrying with keyboard (Enter)...")
+                        webView.evaluateJavascript("document.querySelector('button[name*=\"sign\"], button[name*=\"login\"]')?.focus();") { }
+                        delay(100)
+                        sendKeyEvent(webView, android.view.KeyEvent.KEYCODE_ENTER)
+                    } else {
+                        onStatusChange("Retrying with offset tap...")
+                        val coords = getButtonCoordinates(webView, "Sign In|Login")
+                        if (coords != null) {
+                            nativeTap(webView, coords.first + 5, coords.second + 5)
+                        }
+                    }
+                    signInAttempts++
+                    delay(500)
+                }
+                "wrong_credentials" -> {
+                    onComplete(LoginAttemptResult("FAILED", "WRONG_CREDENTIALS"))
+                    return
+                }
+                "account_locked" -> {
+                    onComplete(LoginAttemptResult("FAILED", "ACCOUNT_LOCKED"))
+                    return
+                }
+                "success" -> {
+                    onComplete(LoginAttemptResult("SUCCESS", "Login completed"))
+                    return
+                }
+                else -> {
+                    delay(SETTLE_POLL_MS)
+                }
+            }
+
+            if (System.currentTimeMillis() - startTime > ATTEMPT_TIMEOUT_MS) break
+        }
+
+        onComplete(LoginAttemptResult("FAILED", "TIMEOUT -- Sign In button not clicked in time"))
+
     } catch (e: Exception) {
-        null
-    }
-    return InspectResult(
-        status = json?.optString("status")?.takeIf { it.isNotBlank() } ?: "unknown",
-        url = json?.optString("url")?.takeIf { it.isNotBlank() },
-        errorHit = json?.optString("errorHit")?.takeIf { it.isNotBlank() && it != "null" },
-        tapX = json?.let { if (it.has("x")) it.optDouble("x") else null }?.takeIf { !it.isNaN() },
-        tapY = json?.let { if (it.has("y")) it.optDouble("y") else null }?.takeIf { !it.isNaN() }
-    )
-}
-
-fun outcomeFromFinal(result: InspectResult): LoginAttemptOutcome {
-    val finalUrl = result.url ?: ""
-    val stillOnLogin = finalUrl.contains("login", ignoreCase = true)
-    return when {
-        result.errorHit != null -> LoginAttemptOutcome.Failed("page shows \"${result.errorHit}\"")
-        !stillOnLogin -> LoginAttemptOutcome.Success
-        else -> LoginAttemptOutcome.Failed(
-            "still on the login page after the full username+password sequence -- may need a CAPTCHA/verification step done by hand"
-        )
+        onComplete(LoginAttemptResult("FAILED", "ERROR: ${e.message}"))
     }
 }
 
-fun statusLabelFor(status: String): String = when (status) {
-    "submitted_username" -> "Username submitted, moving to the password step..."
-    "need_tap_continue" -> "Tapping Continue..."
-    "need_tap_signin" -> "Tapping Sign In..."
-    "need_tap_cookies" -> "Accepting the cookie notice..."
-    "need_tap_popup" -> "Dismissing a profile-completion popup..."
-    "waiting_password_result" -> "Password submitted, waiting for the page to respond..."
-    "waiting_username_result" -> "Username submitted, waiting for the page to respond..."
-    "filling_password_step" -> "Filling in the password step..."
-    "settling_before_continue" -> "Closing the keyboard before tapping Continue..."
-    "settling_before_signin" -> "Closing the keyboard before tapping Sign In..."
-    "need_key_continue" -> "Continue didn't respond to a tap -- trying a keyboard Enter instead..."
-    "need_key_signin" -> "Sign In didn't respond to a tap -- trying a keyboard Enter instead..."
-    else -> "Working through login steps..."
+private fun isTimeWithinLimit(startTime: Long, limitMs: Long): Boolean {
+    return System.currentTimeMillis() - startTime < limitMs
 }
 
-/**
- * Dispatches a real, OS-level touch tap (ACTION_DOWN, then a same-spot
- * ACTION_MOVE, then ACTION_UP after a short real hold) at the given page
- * coordinates (CSS px, from getBoundingClientRect) on the given WebView.
- * Unlike anything a JS-injected script can produce, this event is meant to
- * be indistinguishable from an actual finger tap -- necessary because this
- * page's real buttons ignore a synthetic .click() and even a full JS
- * pointerdown/mousedown/mouseup/click event sequence. WebView.getScale()
- * converts CSS px into the WebView's own local view-pixel coordinate space
- * (accounting for the page's current zoom level).
- *
- * Round 48l: earlier rounds dispatched ACTION_DOWN immediately followed by
- * ACTION_UP at the exact same instant (both timestamped "now") -- a real
- * finger tap always has a brief hold (tens of milliseconds) and virtually
- * always a tiny bit of finger movement in between, which is what many
- * touch/click handlers (including, apparently, this page's) key off of
- * rather than the coordinates alone. This version holds the touch down for
- * ~70ms and inserts an ACTION_MOVE of 1px before lifting, so the event
- * sequence looks like a real tap rather than an instantaneous synthetic
- * one. No Android permission is involved anywhere in this: dispatchTouchEvent
- * is a plain View API the app calls on its OWN WebView instance in its own
- * process -- functionally identical to how the WebView already receives
- * every real finger tap the admin makes on screen elsewhere in the app, not
- * a system-wide input-injection capability, so nothing extra needed to be
- * (or could have been) requested at install time.
- */
-fun nativeTap(view: WebView, cssX: Double, cssY: Double) {
-    val scale = if (view.scale > 0f) view.scale else 1f
-    val x = (cssX * scale).toFloat()
-    val y = (cssY * scale).toFloat()
-    val downTime = SystemClock.uptimeMillis()
+private suspend fun inspectAndAct(
+    webView: WebView,
+    onStatusChange: (String) -> Unit
+): String {
+    var result = ""
+    val job = CompletableDeferred<String>()
 
-    val downEvent = MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, x, y, 0)
-    view.dispatchTouchEvent(downEvent)
-    downEvent.recycle()
+    webView.evaluateJavascript("""
+        (function() {
+            const bodyText = document.body.innerText.toLowerCase();
 
-    view.postDelayed({
-        val moveTime = SystemClock.uptimeMillis()
-        val moveEvent = MotionEvent.obtain(downTime, moveTime, MotionEvent.ACTION_MOVE, x + 1f, y + 1f, 0)
-        view.dispatchTouchEvent(moveEvent)
-        moveEvent.recycle()
+            if (bodyText.includes('invalid') && (bodyText.includes('username') || bodyText.includes('password'))) {
+                return JSON.stringify({ action: 'wrong_credentials' });
+            }
 
-        view.postDelayed({
-            val upTime = SystemClock.uptimeMillis()
-            val upEvent = MotionEvent.obtain(downTime, upTime, MotionEvent.ACTION_UP, x + 1f, y + 1f, 0)
-            view.dispatchTouchEvent(upEvent)
-            upEvent.recycle()
-        }, 40L)
-    }, 30L)
-}
+            if (bodyText.includes('account locked') || bodyText.includes('locked due')) {
+                return JSON.stringify({ action: 'account_locked' });
+            }
 
-/**
- * Round 49: tries a real, system-injected touch (via the Accessibility
- * Service's dispatchGesture -- see UtdClickAccessibilityService.tapAtScreenPoint's
- * own doc comment for why this is a meaningfully different mechanism from
- * both the ACTION_CLICK node-click and nativeTap above) at the exact same
- * [cssX]/[cssY] page coordinates the login page's JS already computed.
- * dispatchGesture works in absolute SCREEN coordinates, not CSS/view-local
- * ones, so this adds the WebView's own on-screen position (getLocationOnScreen)
- * to the same scale-adjusted offset nativeTap already uses. Returns false
- * (never throws) whenever the service isn't active or the OS didn't accept
- * the gesture for dispatch -- the caller falls back to nativeTap in that
- * case exactly as before this round, so nothing regresses when the admin
- * hasn't turned the Accessibility Service on.
- */
-fun accessibilityTap(view: WebView, cssX: Double, cssY: Double): Boolean {
-    if (!com.healthdataet.utdcredentials.accessibility.UtdClickAccessibilityService.isActive()) return false
+            const touOverlay = document.querySelector('[role="dialog"]');
+            if (touOverlay && bodyText.includes('terms')) {
+                return JSON.stringify({ action: 'need_tou' });
+            }
+
+            const signInBtn = Array.from(document.querySelectorAll('button')).find(b =>
+                b.innerText.toLowerCase().includes('sign in') || b.innerText.toLowerCase().includes('login'));
+            if (signInBtn && signInBtn.offsetParent !== null) {
+                return JSON.stringify({ action: 'need_signin', x: signInBtn.offsetLeft, y: signInBtn.offsetTop });
+            }
+
+            const continueBtn = Array.from(document.querySelectorAll('button')).find(b =>
+                b.innerText.toLowerCase().includes('continue'));
+            if (continueBtn && continueBtn.offsetParent !== null) {
+                return JSON.stringify({ action: 'need_continue', x: continueBtn.offsetLeft, y: continueBtn.offsetTop });
+            }
+
+            if (document.title.includes('Dashboard') || document.title.includes('Admin') ||
+                document.querySelector('[class*="dashboard"], [class*="admin"]')) {
+                return JSON.stringify({ action: 'success' });
+            }
+
+            return JSON.stringify({ action: 'waiting' });
+        })()
+    """) { jsonResult ->
+        try {
+            val data = org.json.JSONObject(jsonResult)
+            result = data.getString("action")
+            job.complete(result)
+        } catch (e: Exception) {
+            job.complete("waiting")
+        }
+    }
+
     return try {
-        val scale = if (view.scale > 0f) view.scale else 1f
-        val loc = IntArray(2)
-        view.getLocationOnScreen(loc)
-        val screenX = loc[0] + (cssX * scale).toFloat()
-        val screenY = loc[1] + (cssY * scale).toFloat()
-        com.healthdataet.utdcredentials.accessibility.UtdClickAccessibilityService.tapAtScreenPoint(screenX, screenY)
+        withTimeoutOrNull(2000) { job.await() } ?: "waiting"
+    } catch (e: Exception) {
+        "waiting"
+    }
+}
+
+private suspend fun waitForAndHandlePopup(webView: WebView, popupType: String): Boolean {
+    repeat(5) {
+        val hasPopup = detectPopup(webView, popupType)
+        if (hasPopup) {
+            clickPopupButton(webView, popupType)
+            delay(500)
+            return true
+        }
+        delay(300)
+    }
+    return false
+}
+
+private suspend fun detectPopup(webView: WebView, popupType: String): Boolean {
+    var detected = false
+    val job = CompletableDeferred<Boolean>()
+
+    val searchText = when (popupType) {
+        "cookie" -> "cookie|consent"
+        "tou" -> "terms|agreement|accept terms"
+        else -> ""
+    }
+
+    webView.evaluateJavascript("""
+        (function() {
+            const overlay = document.querySelector('[role="dialog"], .modal, [class*="popup"]');
+            if (overlay && overlay.offsetParent !== null) {
+                const text = overlay.innerText.toLowerCase();
+                return text.includes('$searchText');
+            }
+            return false;
+        })()
+    """) { result ->
+        detected = result.toBoolean()
+        job.complete(detected)
+    }
+
+    return try {
+        withTimeoutOrNull(2000) { job.await() } ?: false
     } catch (e: Exception) {
         false
     }
 }
 
-/**
- * Round 48n: the second Sign In/Continue retry attempt (see
- * inspectAndActScript's verify-then-retry blocks) uses this instead of
- * another coordinate tap -- a completely different, coordinate-free
- * mechanism for the exact same problem (this page's Sign In/Continue not
- * reacting to anything JS alone can produce). The JS side first calls
- * `.focus()` on the button so it's the actual DOM-focused element, then
- * Android dispatches a real hardware-style ENTER key event (ACTION_DOWN +
- * ACTION_UP for KEYCODE_ENTER) straight at the WebView. Browsers (including
- * WebView's underlying engine) treat Enter/Space on a focused button as a
- * genuine, trusted activation -- generated by the engine itself, not by
- * JS -- exactly like a real keyboard would, so this sidesteps the whole
- * on-screen-coordinate/scale question entirely: it doesn't matter where the
- * button visually is, only that it's focused.
- */
-fun nativeEnterKeyPress(view: WebView) {
-    val eventTime = SystemClock.uptimeMillis()
-    val downEvent = KeyEvent(eventTime, eventTime, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER, 0)
-    view.dispatchKeyEvent(downEvent)
-    val upEvent = KeyEvent(eventTime, SystemClock.uptimeMillis(), KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER, 0)
-    view.dispatchKeyEvent(upEvent)
+private fun clickPopupButton(webView: WebView, popupType: String) {
+    webView.evaluateJavascript("""
+        (function() {
+            const overlay = document.querySelector('[role="dialog"], .modal, [class*="popup"]');
+            if (overlay) {
+                const buttons = Array.from(overlay.querySelectorAll('button'));
+                const btn = buttons.find(b => b.innerText.toLowerCase().includes('accept') ||
+                                              b.innerText.toLowerCase().includes('agree') ||
+                                              b.innerText.toLowerCase().includes('ok'));
+                if (btn) btn.click();
+            }
+        })()
+    """) {}
 }
 
-/**
- * Round 48k: fire-and-forget reports one attempt's outcome back to the
- * panel (ApiClient.reportLoginAttempt) so the Credentials Hub's "Sign-In
- * Test" column can show when this credential was last tried and what
- * happened. Shared by both UpToDateLoginScreen and SequentialLoginScreen
- * so the outcome-to-status/reason mapping can never drift between them.
- * [sourceId] is the exact (source, id) pair the credential was handed with
- * from /api/v1/credentials/list -- null skips reporting entirely (nothing
- * to key the result against). Never surfaces a failure back to the caller:
- * a network hiccup here must never affect the login flow itself, only the
- * Hub's visibility into it.
- *
- * Round 48l: also appends to the on-device LoginHistoryStore (a purely
- * local log, separate from the website's per-credential Sign-In Test
- * column) so the new in-app History screen has something to show --
- * ucCode/username let the History list read out identities without another
- * network round-trip. [context] can be omitted by call sites that don't
- * have one handy, in which case only the server-side report happens.
- */
-fun reportLoginOutcome(
-    scope: CoroutineScope,
-    session: SessionManager,
-    sourceId: Pair<String, Long>?,
-    outcome: LoginAttemptOutcome,
-    context: Context? = null,
-    ucCode: String? = null,
-    username: String? = null
-) {
-    val (status, reason) = when (outcome) {
-        is LoginAttemptOutcome.Success -> "success" to null
-        is LoginAttemptOutcome.Failed -> "failed" to outcome.reason
-        is LoginAttemptOutcome.TimedOut -> "timeout" to "No clear result within the attempt timeout"
-        is LoginAttemptOutcome.Skipped -> "skipped" to null
+private fun fillField(webView: WebView, fieldType: String, value: String) {
+    val selector = when (fieldType) {
+        "username" -> "input[type='text'], input[type='email'], input[name*='user'], input[name*='login']"
+        "password" -> "input[type='password']"
+        else -> ""
     }
 
-    if (context != null && sourceId != null) {
-        val (source, id) = sourceId
+    webView.evaluateJavascript("""
+        (function() {
+            const field = document.querySelector('$selector');
+            if (field) {
+                field.value = '$value';
+                field.dispatchEvent(new Event('input', { bubbles: true }));
+                field.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        })()
+    """) {}
+}
+
+private fun submitField(webView: WebView) {
+    webView.evaluateJavascript("""
+        (function() {
+            const form = document.querySelector('form');
+            if (form) form.submit();
+        })()
+    """) {}
+}
+
+private fun sendKeyEvent(webView: WebView, keyCode: Int) {
+    webView.evaluateJavascript("""
+        (function() {
+            const event = new KeyboardEvent('keydown', {
+                keyCode: $keyCode,
+                code: 'Enter',
+                key: 'Enter',
+                bubbles: true
+            });
+            document.activeElement?.dispatchEvent(event);
+        })()
+    """) {}
+}
+
+private fun getButtonCoordinates(webView: WebView, buttonText: String): Pair<Float, Float>? {
+    var coords: Pair<Float, Float>? = null
+
+    webView.evaluateJavascript("""
+        (function() {
+            const buttons = Array.from(document.querySelectorAll('button'));
+            const btn = buttons.find(b => b.innerText.match(/$buttonText/i));
+            if (btn) {
+                const rect = btn.getBoundingClientRect();
+                return JSON.stringify({ x: rect.left + rect.width/2, y: rect.top + rect.height/2 });
+            }
+            return null;
+        })()
+    """) { result ->
         try {
-            LoginHistoryStore.record(context, source, id, ucCode, username, status, reason)
+            val json = org.json.JSONObject(result)
+            coords = Pair(json.getDouble("x").toFloat(), json.getDouble("y").toFloat())
         } catch (e: Exception) {
-            // Local logging only -- never let this affect the login flow.
+            coords = null
         }
     }
 
-    val token = session.apiToken ?: return
-    val (source, id) = sourceId ?: return
-    scope.launch {
-        withContext(Dispatchers.IO) {
-            try {
-                ApiClient(session.baseUrl).reportLoginAttempt(token, source, id, status, reason)
-            } catch (e: Exception) {
-                // Best-effort telemetry only -- never let this affect the
-                // login flow itself.
-            }
-        }
-    }
+    return coords
 }
 
-fun startLoginAutomation(
-    view: WebView,
-    username: String,
-    password: String,
-    isResolved: () -> Boolean,
-    onStatus: (String) -> Unit,
-    onResolved: (LoginAttemptOutcome) -> Unit
-) {
-    val finalConfirmationsNeeded = 2
-    var consecutiveFinal = 0
-    val tapStatuses = setOf("need_tap_cookies", "need_tap_popup", "need_tap_continue", "need_tap_signin")
-    // Round 48n: the coordinate-free fallback -- see nativeEnterKeyPress's
-    // own doc comment for why a focus+ENTER key event is a genuinely
-    // different mechanism from a tap, not just a repeat of the same one.
-    val keyStatuses = setOf("need_key_continue", "need_key_signin")
+private fun nativeTap(webView: WebView, x: Float, y: Float) {
+    val downTime = System.currentTimeMillis()
 
-    fun poll(delayMs: Long) {
-        view.postDelayed({
-            if (isResolved()) return@postDelayed
-            view.evaluateJavascript(inspectAndActScript(username, password)) { raw ->
-                if (isResolved()) return@evaluateJavascript
-                val result = interpretInspectResult(raw)
-                if (result.status == "final") {
-                    consecutiveFinal++
-                    if (consecutiveFinal >= finalConfirmationsNeeded) {
-                        onResolved(outcomeFromFinal(result))
-                    } else {
-                        poll(INSPECT_INTERVAL_MS)
-                    }
-                } else {
-                    consecutiveFinal = 0
-                    // Round 48p: for Sign In/Continue specifically (never
-                    // cookies/popup, which already work fine on every
-                    // attempt) -- if the admin has enabled the
-                    // Accessibility Service fallback, try a real
-                    // ACTION_CLICK on the button's own accessibility node
-                    // FIRST, on every single dispatch (first attempt and
-                    // every retry), before falling back to whatever the JS
-                    // status already asked for (a coordinate tap or a key
-                    // press). See UtdClickAccessibilityService's doc
-                    // comment for why this is the most reliable mechanism
-                    // when it's available, and why it costs nothing to try
-                    // first when it isn't (isActive() is a cheap null
-                    // check, so this is a no-op unless the admin actually
-                    // turned the service on).
-                    val signInLike = result.status == "need_tap_signin" || result.status == "need_key_signin"
-                    val continueLike = result.status == "need_tap_continue" || result.status == "need_key_continue"
-                    val accessibilityHandled = (signInLike || continueLike) &&
-                        com.healthdataet.utdcredentials.accessibility.UtdClickAccessibilityService.isActive() &&
-                        com.healthdataet.utdcredentials.accessibility.UtdClickAccessibilityService.clickButtonByText(
-                            if (signInLike) listOf("sign in", "log in", "submit") else listOf("continue", "next")
-                        )
+    val downEvent = MotionEvent.obtain(
+        downTime,
+        downTime,
+        MotionEvent.ACTION_DOWN,
+        x, y,
+        0
+    )
+    webView.dispatchTouchEvent(downEvent)
+    downEvent.recycle()
 
-                    // Round 49: appended to every status line so a screenshot
-                    // during a stuck/timed-out attempt actually reveals which
-                    // click mechanism was tried, instead of every attempt
-                    // showing the same generic "Password submitted, waiting
-                    // for the page to respond..." regardless of what was
-                    // really attempted underneath.
-                    var mechanismTag = ""
+    Thread.sleep(70)
 
-                    if (accessibilityHandled) {
-                        mechanismTag = " [accessibility: node click]"
-                        onStatus(statusLabelFor(result.status) + mechanismTag)
-                        poll(SUBMIT_SETTLE_MS)
-                    } else if (result.status in tapStatuses && result.tapX != null && result.tapY != null) {
-                        // Round 49: try a real system-injected touch through
-                        // the Accessibility Service FIRST (see
-                        // accessibilityTap's doc comment) -- only falls back
-                        // to the in-process nativeTap when the service isn't
-                        // active or the OS didn't accept the gesture.
-                        val didAccessibilityTap = accessibilityTap(view, result.tapX, result.tapY)
-                        mechanismTag = if (didAccessibilityTap) " [accessibility: gesture tap]" else " [in-app tap]"
-                        if (!didAccessibilityTap) {
-                            nativeTap(view, result.tapX, result.tapY)
-                        }
-                        onStatus(statusLabelFor(result.status) + mechanismTag)
-                        val nextDelay = if (result.status == "need_tap_continue" || result.status == "need_tap_signin") {
-                            SUBMIT_SETTLE_MS
-                        } else {
-                            TAP_SETTLE_MS
-                        }
-                        poll(nextDelay)
-                    } else if (result.status in keyStatuses) {
-                        nativeEnterKeyPress(view)
-                        onStatus(statusLabelFor(result.status) + " [in-app key press]")
-                        poll(SUBMIT_SETTLE_MS)
-                    } else {
-                        onStatus(statusLabelFor(result.status))
-                        val nextDelay = when (result.status) {
-                            "submitted_username" -> SUBMIT_SETTLE_MS
-                            "settling_before_continue", "settling_before_signin" -> SETTLE_POLL_MS
-                            else -> INSPECT_INTERVAL_MS
-                        }
-                        poll(nextDelay)
-                    }
-                }
-            }
-        }, delayMs)
-    }
+    val moveEvent = MotionEvent.obtain(
+        downTime,
+        System.currentTimeMillis(),
+        MotionEvent.ACTION_MOVE,
+        x + 1f, y,
+        0
+    )
+    webView.dispatchTouchEvent(moveEvent)
+    moveEvent.recycle()
 
-    poll(INSPECT_INTERVAL_MS)
+    Thread.sleep(10)
+
+    val upEvent = MotionEvent.obtain(
+        downTime,
+        System.currentTimeMillis(),
+        MotionEvent.ACTION_UP,
+        x + 1f, y,
+        0
+    )
+    webView.dispatchTouchEvent(upEvent)
+    upEvent.recycle()
 }
