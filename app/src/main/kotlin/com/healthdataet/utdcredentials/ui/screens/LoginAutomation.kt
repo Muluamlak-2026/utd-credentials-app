@@ -86,26 +86,28 @@ suspend fun startLoginAutomation(
 
             when (action) {
                 "need_signin" -> {
-                    if (signInAttempts == 0) {
-                        onStatusChange("Clicking Sign In (native tap)...")
-                        val coords = getButtonCoordinates(webView, "Sign In|Login")
-                        if (coords != null) {
+                    onStatusChange("Found Sign In button - attempting click...")
+                    
+                    val coords = getSignInButtonCoordinates(webView)
+                    
+                    if (coords != null) {
+                        if (signInAttempts == 0) {
+                            onStatusChange("Attempt 1: Native tap on Sign In button...")
                             nativeTap(webView, coords.first, coords.second)
+                        } else if (signInAttempts == 1) {
+                            onStatusChange("Attempt 2: Native tap with offset...")
+                            nativeTap(webView, coords.first + 3, coords.second + 3)
+                        } else if (signInAttempts == 2) {
+                            onStatusChange("Attempt 3: JavaScript click...")
+                            clickSignInViaJavaScript(webView)
                         }
-                    } else if (signInAttempts == 1) {
-                        onStatusChange("Retrying with keyboard (Enter)...")
-                        webView.evaluateJavascript("document.querySelector('button[name*=\"sign\"], button[name*=\"login\"]')?.focus();") { }
-                        delay(100)
-                        sendKeyEvent(webView, android.view.KeyEvent.KEYCODE_ENTER)
                     } else {
-                        onStatusChange("Retrying with offset tap...")
-                        val coords = getButtonCoordinates(webView, "Sign In|Login")
-                        if (coords != null) {
-                            nativeTap(webView, coords.first + 5, coords.second + 5)
-                        }
+                        onStatusChange("Could not locate Sign In button, trying JavaScript click...")
+                        clickSignInViaJavaScript(webView)
                     }
+                    
                     signInAttempts++
-                    delay(500)
+                    delay(TAP_SETTLE_MS)
                 }
                 "wrong_credentials" -> {
                     onComplete(LoginAttemptResult("FAILED", "WRONG_CREDENTIALS"))
@@ -162,16 +164,19 @@ private suspend fun inspectAndAct(
                 return JSON.stringify({ action: 'need_tou' });
             }
 
-            const signInBtn = Array.from(document.querySelectorAll('button')).find(b =>
-                b.innerText.toLowerCase().includes('sign in') || b.innerText.toLowerCase().includes('login'));
+            const buttons = Array.from(document.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"]'));
+            const signInBtn = buttons.find(b => {
+                const text = b.innerText?.toLowerCase() || b.value?.toLowerCase() || '';
+                return text.includes('sign in') || text.includes('login') || text.includes('submit');
+            });
             if (signInBtn && signInBtn.offsetParent !== null) {
-                return JSON.stringify({ action: 'need_signin', x: signInBtn.offsetLeft, y: signInBtn.offsetTop });
+                return JSON.stringify({ action: 'need_signin' });
             }
 
             const continueBtn = Array.from(document.querySelectorAll('button')).find(b =>
                 b.innerText.toLowerCase().includes('continue'));
             if (continueBtn && continueBtn.offsetParent !== null) {
-                return JSON.stringify({ action: 'need_continue', x: continueBtn.offsetLeft, y: continueBtn.offsetTop });
+                return JSON.stringify({ action: 'need_continue' });
             }
 
             if (document.title.includes('Dashboard') || document.title.includes('Admin') ||
@@ -285,43 +290,56 @@ private fun submitField(webView: WebView) {
     """) {}
 }
 
-private fun sendKeyEvent(webView: WebView, keyCode: Int) {
-    webView.evaluateJavascript("""
-        (function() {
-            const event = new KeyboardEvent('keydown', {
-                keyCode: $keyCode,
-                code: 'Enter',
-                key: 'Enter',
-                bubbles: true
-            });
-            document.activeElement?.dispatchEvent(event);
-        })()
-    """) {}
-}
-
-private fun getButtonCoordinates(webView: WebView, buttonText: String): Pair<Float, Float>? {
+private fun getSignInButtonCoordinates(webView: WebView): Pair<Float, Float>? {
     var coords: Pair<Float, Float>? = null
 
     webView.evaluateJavascript("""
         (function() {
-            const buttons = Array.from(document.querySelectorAll('button'));
-            const btn = buttons.find(b => b.innerText.match(/$buttonText/i));
-            if (btn) {
-                const rect = btn.getBoundingClientRect();
-                return JSON.stringify({ x: rect.left + rect.width/2, y: rect.top + rect.height/2 });
+            const buttons = Array.from(document.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"]'));
+            const signInBtn = buttons.find(b => {
+                const text = b.innerText?.toLowerCase() || b.value?.toLowerCase() || '';
+                return text.includes('sign in') || text.includes('login') || text.includes('submit');
+            });
+            
+            if (signInBtn && signInBtn.offsetParent !== null) {
+                const rect = signInBtn.getBoundingClientRect();
+                const x = window.scrollX + rect.left + rect.width / 2;
+                const y = window.scrollY + rect.top + rect.height / 2;
+                return JSON.stringify({ x: x, y: y });
             }
             return null;
         })()
     """) { result ->
         try {
-            val json = org.json.JSONObject(result)
-            coords = Pair(json.getDouble("x").toFloat(), json.getDouble("y").toFloat())
+            if (result != null && result != "null") {
+                val json = org.json.JSONObject(result)
+                coords = Pair(json.getDouble("x").toFloat(), json.getDouble("y").toFloat())
+            }
         } catch (e: Exception) {
             coords = null
         }
     }
 
     return coords
+}
+
+private fun clickSignInViaJavaScript(webView: WebView) {
+    webView.evaluateJavascript("""
+        (function() {
+            const buttons = Array.from(document.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"]'));
+            const signInBtn = buttons.find(b => {
+                const text = b.innerText?.toLowerCase() || b.value?.toLowerCase() || '';
+                return text.includes('sign in') || text.includes('login') || text.includes('submit');
+            });
+            
+            if (signInBtn) {
+                signInBtn.click();
+                signInBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                signInBtn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                signInBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            }
+        })()
+    """) {}
 }
 
 private fun nativeTap(webView: WebView, x: Float, y: Float) {

@@ -1,362 +1,284 @@
 package com.healthdataet.utdcredentials.ui.screens
 
-import android.annotation.SuppressLint
-import android.view.ViewGroup
-import android.webkit.CookieManager
+import android.content.Context
+import android.content.SharedPreferences
+import android.view.WindowManager
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material3.Card
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
-import com.healthdataet.utdcredentials.data.PendingSequentialLogins
-import com.healthdataet.utdcredentials.data.SessionManager
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.*
 
-// UPTODATE_LOGIN_URL, ATTEMPT_TIMEOUT_MS, INSPECT_INTERVAL_MS,
-// inspectAndActScript, LoginAttemptOutcome, InspectResult,
-// interpretInspectResult, outcomeFromFinal and statusLabelFor all now live
-// in LoginAutomation.kt, shared with UpToDateLoginScreen.kt's single-
-// credential automated flow -- see that file's doc comment for why.
-
-data class LoginAttemptResult(
-    val credential: CredentialEntry,
-    val outcome: LoginAttemptOutcome
+data class SequentialLoginItem(
+    val username: String,
+    val password: String,
+    val status: String = "PENDING",
+    val reason: String = "",
+    val timestamp: Long = System.currentTimeMillis()
 )
 
-/** One unattended login attempt: fresh WebView, cleared cookies/cache (the
- * actual "log out" from whatever the previous credential's attempt left
- * behind), fill, submit, then read the result. Wrapped in
- * key(currentIndex) by the caller so a brand new instance -- and a brand
- * new timeout -- is created per credential, and the previous one is fully
- * torn down (WebView destroyed, timeout cancelled) the moment this one is
- * done. */
-@SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun LoginAttemptRunner(
-    credential: CredentialEntry,
-    onStatusChange: (String) -> Unit,
-    onDone: (LoginAttemptOutcome) -> Unit
+fun SequentialLoginScreen(
+    credentials: List<Pair<String, String>>,
+    onBack: () -> Unit
 ) {
-    var resolved by remember { mutableStateOf(false) }
-
-    fun resolveOnce(outcome: LoginAttemptOutcome) {
-        if (!resolved) {
-            resolved = true
-            onDone(outcome)
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    
+    var items by remember { mutableStateOf(
+        credentials.mapIndexed { index, (user, pass) ->
+            SequentialLoginItem(user, pass)
         }
+    )}
+    
+    var isPaused by remember { mutableStateOf(false) }
+    var isRunning by remember { mutableStateOf(false) }
+    var currentIndex by remember { mutableStateOf(0) }
+    
+    val sharedPrefs = remember { 
+        context.getSharedPreferences("utd_sequential", Context.MODE_PRIVATE)
     }
-
+    
+    var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    
     LaunchedEffect(Unit) {
-        delay(ATTEMPT_TIMEOUT_MS)
-        resolveOnce(LoginAttemptOutcome.TimedOut)
+        isPaused = sharedPrefs.getBoolean("is_paused", false)
     }
-
-    val username = credential.username
-    val password = credential.password
-
-    if (username.isNullOrBlank() || password.isNullOrBlank()) {
-        LaunchedEffect(Unit) { resolveOnce(LoginAttemptOutcome.Skipped) }
-        return
-    }
-
-    AndroidView(
-        modifier = Modifier.fillMaxSize(),
-        factory = { ctx ->
-            var loopStarted = false
-
-            WebView(ctx).apply {
-                layoutParams = ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT
-                )
-                settings.javaScriptEnabled = true
-                settings.domStorageEnabled = true
-                settings.useWideViewPort = true
-                settings.loadWithOverviewMode = true
-
-                // The actual "log out" between credentials: wipe any
-                // cookie/session state the previous attempt left behind
-                // before this one even starts loading the login page.
-                CookieManager.getInstance().removeAllCookies(null)
-                CookieManager.getInstance().flush()
-                clearCache(true)
-                clearHistory()
-
-                webViewClient = object : WebViewClient() {
-                    override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
-                        super.onPageStarted(view, url, favicon)
-                        onStatusChange("Loading login page...")
-                    }
-
-                    override fun onPageFinished(view: WebView, url: String?) {
-                        super.onPageFinished(view, url)
-                        // Only kick the poll loop off once -- if
-                        // uptodate.com navigates again mid-flow (the real
-                        // step-2 page), the already-running loop notices
-                        // that on its own next tick rather than starting a
-                        // second loop alongside it (which could double
-                        // click/submit).
-                        if (!loopStarted) {
-                            loopStarted = true
-                            onStatusChange("Working through login steps...")
-                            startLoginAutomation(
-                                view = view,
-                                username = username,
-                                password = password,
-                                isResolved = { resolved },
-                                onStatus = onStatusChange,
-                                onResolved = { resolveOnce(it) }
-                            )
-                        }
+    
+    LaunchedEffect(isPaused, isRunning) {
+        webViewRef?.let { webView ->
+            try {
+                val view = webView
+                val params = view.layoutParams
+                if (params is WindowManager.LayoutParams) {
+                    if (isPaused && isRunning) {
+                        params.flags = params.flags or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                        sharedPrefs.edit().putBoolean("is_paused", true).apply()
+                    } else if (!isPaused && isRunning) {
+                        params.flags = params.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON.inv()
+                        sharedPrefs.edit().putBoolean("is_paused", false).apply()
+                    } else if (!isRunning) {
+                        params.flags = params.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON.inv()
+                        sharedPrefs.edit().remove("is_paused").apply()
                     }
                 }
-
-                loadUrl(UPTODATE_LOGIN_URL)
-            }
-        }
-    )
-}
-
-@Composable
-private fun ResultRow(result: LoginAttemptResult, compact: Boolean = false) {
-    val label: String
-    val color: androidx.compose.ui.graphics.Color
-    when (val outcome = result.outcome) {
-        is LoginAttemptOutcome.Success -> {
-            label = "SUCCESS"
-            color = MaterialTheme.colorScheme.primary
-        }
-        is LoginAttemptOutcome.Failed -> {
-            label = "FAILED -- ${outcome.reason}"
-            color = MaterialTheme.colorScheme.error
-        }
-        is LoginAttemptOutcome.TimedOut -> {
-            label = "TIMEOUT -- no clear result in time"
-            color = MaterialTheme.colorScheme.error
-        }
-        is LoginAttemptOutcome.Skipped -> {
-            label = "SKIPPED -- no username/password on file"
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        }
-    }
-    Card(modifier = Modifier.fillMaxWidth().padding(vertical = if (compact) 2.dp else 4.dp)) {
-        Column(modifier = Modifier.padding(if (compact) 6.dp else 12.dp)) {
-            Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    result.credential.ucCode ?: result.credential.username ?: "(unknown)",
-                    style = if (compact) MaterialTheme.typography.labelMedium else MaterialTheme.typography.titleSmall
-                )
-                Text(label, style = MaterialTheme.typography.labelSmall, color = color)
-            }
-            if (!compact) {
-                Text(
-                    "Username: ${result.credential.username ?: "-"}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            } catch (e: Exception) {
             }
         }
     }
-}
-
-/**
- * Round 48i follow-up: "sequential auto login, log out with successful or
- * failure report of login for each pair of credentials" -- consumes the
- * batch CredentialPickerScreen queued via PendingSequentialLogins, then
- * works through it one credential at a time: load the real uptodate.com
- * login page, fill it in, submit it, read whether it looks like it
- * succeeded or failed, clear the session, and move to the next. A live
- * report builds up below as each attempt finishes; a "Stop" action in the
- * top bar ends the run early without losing the results gathered so far.
- *
- * uptodate.com's real login turned out to be a two-step flow (username +
- * Continue, then a separate password + Sign In step, with an occasional
- * "complete your profile" popup in between) -- inspectAndActScript handles
- * all of that by re-checking what's actually on screen on a timer and
- * acting on whichever step is currently showing, rather than assuming one
- * fill-everything-then-submit-once pass.
- *
- * Success/failure detection is still necessarily a best-effort heuristic
- * since uptodate.com's exact markup can't be verified from outside a live
- * attempt -- a genuine CAPTCHA or 2FA step would still show up here as a
- * "still on the login page" failure, which is the honest, safe read rather
- * than a guessed false "success".
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun SequentialLoginScreen(session: SessionManager, onBack: () -> Unit) {
-    val appContext = LocalContext.current.applicationContext
-    val queue = remember { PendingSequentialLogins.consume().orEmpty() }
-    var results by remember { mutableStateOf(listOf<LoginAttemptResult>()) }
-    var currentIndex by remember { mutableStateOf(0) }
-    var statusText by remember { mutableStateOf("Starting...") }
-    var stopRequested by remember { mutableStateOf(false) }
-    // Round 54: Pause freezes the batch exactly where it is without losing
-    // anything already gathered. Every completed attempt's result is already
-    // committed to `results` (and reported) the moment it finished, and
-    // `currentIndex` is the batch's position -- neither is touched by
-    // pausing. Only the ONE attempt currently in flight is affected: while
-    // paused, the LoginAttemptRunner below leaves composition, which tears
-    // down its WebView and cancels its timeout, so that half-done attempt
-    // simply isn't recorded (its credential is still at `currentIndex`,
-    // un-consumed). Resuming re-mounts a fresh runner for that same
-    // `currentIndex`, so it starts that one credential over cleanly and
-    // continues down the queue from there -- "100% sync": no skipped
-    // credentials, no double-recorded results, no lost report rows. This is
-    // exactly the handle for "pause when network/battery is low, or when
-    // there's no human around to tap Sign In, then resume when they're back."
-    var paused by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-
-    val finished = queue.isEmpty() || currentIndex >= queue.size || stopRequested
-    // The single credential's WebView attempt only runs when we're neither
-    // finished nor paused. Layout (below) also keys off this so the result
-    // list takes the whole screen while paused, same as when finished.
-    val running = !finished && !paused
-    val successCount = results.count { it.outcome is LoginAttemptOutcome.Success }
-    val failCount = results.count {
-        it.outcome is LoginAttemptOutcome.Failed || it.outcome is LoginAttemptOutcome.TimedOut
+    
+    val runLoginSequence = {
+        scope.launch {
+            isRunning = true
+            currentIndex = 0
+            
+            items.forEachIndexed { index, item ->
+                if (!isRunning) return@forEachIndexed
+                
+                while (isPaused && isRunning) {
+                    delay(500)
+                }
+                
+                if (!isRunning) return@forEachIndexed
+                
+                currentIndex = index
+                items = items.toMutableList().apply {
+                    set(index, items[index].copy(status = "RUNNING"))
+                }
+                
+                webViewRef?.let { webView ->
+                    val result = withTimeoutOrNull(25_000L) {
+                        suspendCancellableCoroutine<LoginAttemptResult> { continuation ->
+                            startLoginAutomation(
+                                webView = webView,
+                                username = item.username,
+                                password = item.password,
+                                onStatusChange = { },
+                                onComplete = { result ->
+                                    continuation.resume(result)
+                                },
+                                scope = scope
+                            )
+                        }
+                    } ?: LoginAttemptResult("FAILED", "TIMEOUT")
+                    
+                    items = items.toMutableList().apply {
+                        val statusText = when (result.status) {
+                            "SUCCESS" -> "SUCCESS"
+                            "FAILED" -> when (result.reason) {
+                                "WRONG_CREDENTIALS" -> "WRONG_CREDENTIALS"
+                                "ACCOUNT_LOCKED" -> "ACCOUNT_LOCKED"
+                                else -> "TIMEOUT"
+                            }
+                            else -> result.status
+                        }
+                        set(index, items[index].copy(
+                            status = statusText,
+                            reason = result.reason
+                        ))
+                    }
+                }
+                
+                delay(1000)
+            }
+            
+            isRunning = false
+            sharedPrefs.edit().remove("is_paused").apply()
+        }
     }
-
+    
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Sequential Login") },
+                title = { Text("Sequential Login (Round 65)", fontWeight = FontWeight.Bold) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
+                    Button(onClick = onBack, modifier = Modifier.padding(8.dp)) {
+                        Text("← Back")
                     }
                 },
-                actions = {
-                    if (!finished) {
-                        // Pause sits next to Stop: Pause is reversible (freeze
-                        // and Resume later), Stop ends the run for good but
-                        // still keeps every result gathered so far.
-                        if (paused) {
-                            TextButton(onClick = { paused = false }) { Text("Resume") }
-                        } else {
-                            TextButton(onClick = { paused = true }) { Text("Pause") }
-                        }
-                        TextButton(onClick = { stopRequested = true }) { Text("Stop") }
-                    }
-                }
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color(0xFF1F1F1F)
+                )
             )
         }
     ) { padding ->
-        // Round 48n(e): navigationBarsPadding() keeps the result list/footer
-        // clear of the phone's gesture nav bar instead of being clipped by it.
-        Column(modifier = Modifier.fillMaxSize().padding(padding).navigationBarsPadding()) {
-            if (queue.isEmpty()) {
-                Text(
-                    "No credentials were selected -- go back and check at least one.",
-                    modifier = Modifier.padding(16.dp),
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            } else {
-                // Round 48l: this header used to be 16dp-padded titleSmall
-                // + bodySmall (two full lines of chrome eating into the
-                // WebView below) -- shrunk to one compact line so "the
-                // actual working screen will be enough".
-                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                    if (finished) {
-                        Text(
-                            "Finished: $successCount succeeded, $failCount failed, " +
-                                "${results.size - successCount - failCount} skipped, " +
-                                "out of ${results.size} attempted",
-                            style = MaterialTheme.typography.labelMedium
-                        )
-                        if (stopRequested && currentIndex < queue.size) {
-                            Text(
-                                "Stopped early -- ${queue.size - currentIndex} credential(s) were not attempted.",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    } else if (paused) {
-                        val pausedCred = queue[currentIndex]
-                        Text(
-                            "Paused at attempt ${currentIndex + 1}/${queue.size}: " +
-                                (pausedCred.ucCode ?: pausedCred.username ?: "credential") +
-                                " -- $successCount ok, $failCount failed so far",
-                            style = MaterialTheme.typography.labelMedium,
-                            maxLines = 1
-                        )
-                        Text(
-                            "Frozen here -- nothing gathered so far is lost. Tap Resume when network, battery, or someone to tap Sign In is ready; this credential starts over cleanly and the rest of the queue continues.",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    } else {
-                        val currentCred = queue[currentIndex]
-                        Text(
-                            "Attempt ${currentIndex + 1}/${queue.size}: " +
-                                (currentCred.ucCode ?: currentCred.username ?: "credential") +
-                                " -- $statusText",
-                            style = MaterialTheme.typography.labelMedium,
-                            maxLines = 1
-                        )
-                    }
-                }
-                HorizontalDivider()
-
-                if (running) {
-                    Box(modifier = Modifier.weight(0.7f).fillMaxWidth()) {
-                        key(currentIndex) {
-                            LoginAttemptRunner(
-                                credential = queue[currentIndex],
-                                onStatusChange = { statusText = it },
-                                onDone = { outcome ->
-                                    val cred = queue[currentIndex]
-                                    results = results + LoginAttemptResult(cred, outcome)
-                                    reportLoginOutcome(
-                                        scope, session, Pair(cred.source, cred.id), outcome,
-                                        context = appContext, ucCode = cred.ucCode, username = cred.username
-                                    )
-                                    currentIndex += 1
-                                }
-                            )
-                        }
-                    }
-                }
-
-                LazyColumn(
-                    modifier = Modifier
-                        .weight(if (running) 0.3f else 1f)
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp)
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(16.dp)
+                .background(Color(0xFF121212))
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = runLoginSequence,
+                    enabled = !isRunning,
+                    modifier = Modifier.weight(1f)
                 ) {
-                    items(results.reversed()) { r -> ResultRow(r, compact = running) }
+                    Text("Start")
+                }
+                
+                Button(
+                    onClick = { isPaused = !isPaused },
+                    enabled = isRunning,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(if (isPaused) "Resume" else "Pause")
+                }
+                
+                Button(
+                    onClick = {
+                        isRunning = false
+                        isPaused = false
+                        currentIndex = 0
+                        sharedPrefs.edit().remove("is_paused").apply()
+                        items = items.map { it.copy(status = "PENDING", reason = "") }
+                    },
+                    enabled = isRunning || isPaused,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFD32F2F)
+                    )
+                ) {
+                    Text("Stop")
+                }
+            }
+            
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    "${items.count { it.status == "SUCCESS" }}/${items.size} Success",
+                    color = Color(0xFF4CAF50),
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    "${items.count { it.status == "FAILED" || it.status == "TIMEOUT" || it.status == "WRONG_CREDENTIALS" || it.status == "ACCOUNT_LOCKED" }}/${items.size} Failed",
+                    color = Color(0xFFFF9800),
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                itemsIndexed(items) { index, item ->
+                    val bgColor = when (item.status) {
+                        "SUCCESS" -> Color(0xFF1B5E20)
+                        "RUNNING" -> Color(0xFF0D47A1)
+                        "FAILED", "TIMEOUT", "WRONG_CREDENTIALS", "ACCOUNT_LOCKED" -> Color(0xFF5D0000)
+                        else -> Color(0xFF2F2F2F)
+                    }
+                    
+                    val statusText = when (item.status) {
+                        "WRONG_CREDENTIALS" -> "❌ Wrong Credentials"
+                        "ACCOUNT_LOCKED" -> "🔒 Account Locked"
+                        "TIMEOUT" -> "⏱ Timeout"
+                        "SUCCESS" -> "✓ Success"
+                        "FAILED" -> "❌ Failed"
+                        "RUNNING" -> "⏳ Running..."
+                        else -> "◯ Pending"
+                    }
+                    
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(bgColor),
+                        colors = CardDefaults.cardColors(
+                            containerColor = bgColor
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "${index + 1}. ${item.username}",
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                    fontSize = 14.sp
+                                )
+                                Text(
+                                    statusText,
+                                    color = Color.White,
+                                    fontSize = 12.sp
+                                )
+                            }
+                            if (item.reason.isNotEmpty()) {
+                                Text(
+                                    "Reason: ${item.reason}",
+                                    color = Color(0xFFBBBBBB),
+                                    fontSize = 11.sp,
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
