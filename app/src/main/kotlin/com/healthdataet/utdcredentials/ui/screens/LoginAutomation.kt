@@ -27,7 +27,7 @@ const val UPTODATE_LOGIN_URL = "https://www.uptodate.com/login"
 // wait-for-network/battery/human gap, rather than a long per-attempt timer.)
 // This only affects how long a stuck attempt waits before giving up; it
 // does not slow down any attempt that finishes normally.
-const val ATTEMPT_TIMEOUT_MS = 15_000L
+const val ATTEMPT_TIMEOUT_MS = 20_000L
 const val INSPECT_INTERVAL_MS = 1200L
 const val SUBMIT_SETTLE_MS = 2500L
 const val TAP_SETTLE_MS = 1800L
