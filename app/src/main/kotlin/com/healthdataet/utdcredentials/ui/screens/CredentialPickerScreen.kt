@@ -47,6 +47,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
@@ -65,12 +66,21 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import kotlin.math.ceil
+import kotlin.math.floor
 
 /** One row from /api/v1/credentials/list -- see admin/api_routes.py's
  * list_credentials_for_login for the exact shape this mirrors. Round 48n:
  * lastTestAt/lastTestStatus/lastTestReason are the exact same Sign-In Test
  * result the web Hub's own column shows for this credential (attached
- * server-side, no extra round trip). */
+ * server-side, no extra round trip).
+ *
+ * Round 66: planType/expiryDate are read defensively from several possible
+ * server field-name spellings (see [firstNonBlank] in parseCredentials) so
+ * this keeps working whether the server calls them plan_type/expiry_date or
+ * something else -- if the server doesn't send either field at all yet,
+ * these simply stay null and the new Plan/Near-Expiry filters show nothing
+ * for that row (Failed-Previous-Login and the success color both work today
+ * regardless, since they only depend on the login-test fields already sent). */
 data class CredentialEntry(
     val source: String,
     val id: Long,
@@ -82,8 +92,18 @@ data class CredentialEntry(
     val phone: String?,
     val lastTestAt: String? = null,
     val lastTestStatus: String? = null,
-    val lastTestReason: String? = null
+    val lastTestReason: String? = null,
+    val planType: String? = null,
+    val expiryDate: String? = null
 )
+
+private fun firstNonBlank(o: JSONObject, vararg keys: String): String? {
+    for (k in keys) {
+        val v = o.optString(k)
+        if (v.isNotBlank() && !v.equals("null", ignoreCase = true)) return v
+    }
+    return null
+}
 
 private fun parseCredentials(json: JSONObject?): List<CredentialEntry> {
     val arr = json?.optJSONArray("credentials") ?: return emptyList()
@@ -102,25 +122,125 @@ private fun parseCredentials(json: JSONObject?): List<CredentialEntry> {
                 phone = o.optString("phone").ifBlank { null },
                 lastTestAt = o.optString("login_test_at").ifBlank { null },
                 lastTestStatus = o.optString("login_test_status").ifBlank { null },
-                lastTestReason = o.optString("login_test_reason").ifBlank { null }
+                lastTestReason = o.optString("login_test_reason").ifBlank { null },
+                planType = firstNonBlank(o, "plan_type", "subscription_plan", "plan"),
+                expiryDate = firstNonBlank(o, "expiry_date", "end_date", "expiration_date", "subscription_end_date")
             )
         )
     }
     return out
 }
 
-private fun testSummary(cred: CredentialEntry): Pair<String, Boolean> {
-    // (label, isProblem) -- isProblem picks the error color.
+/** Round 66: three-way coloring instead of a plain problem/no-problem flag
+ * -- a genuinely successful last test now gets its own SUCCESS tone (green)
+ * instead of blending into the same neutral gray as "untested"/"skipped". */
+private enum class TestTone { SUCCESS, PROBLEM, NEUTRAL }
+
+private fun testSummary(cred: CredentialEntry): Pair<String, TestTone> {
     if (cred.username.isNullOrBlank() || cred.password.isNullOrBlank()) {
-        return "Last sign-in test: incomplete credentials" to true
+        return "Last sign-in test: incomplete credentials" to TestTone.PROBLEM
     }
     return when (cred.lastTestStatus) {
-        "success" -> "Last sign-in test: SUCCESS · ${cred.lastTestAt ?: ""}" to false
-        "failed" -> "Last sign-in test: FAILED · ${cred.lastTestAt ?: ""}" to true
-        "timeout" -> "Last sign-in test: TIMED OUT · ${cred.lastTestAt ?: ""}" to true
-        "skipped" -> "Last sign-in test: skipped (no credentials at the time)" to false
-        else -> "Last sign-in test: untested / not tried yet" to false
+        "success" -> "Last sign-in test: SUCCESS · ${cred.lastTestAt ?: ""}" to TestTone.SUCCESS
+        "failed" -> "Last sign-in test: FAILED · ${cred.lastTestAt ?: ""}" to TestTone.PROBLEM
+        "timeout" -> "Last sign-in test: TIMED OUT · ${cred.lastTestAt ?: ""}" to TestTone.PROBLEM
+        "skipped" -> "Last sign-in test: skipped (no credentials at the time)" to TestTone.NEUTRAL
+        else -> "Last sign-in test: untested / not tried yet" to TestTone.NEUTRAL
     }
+}
+
+/** Normalizes whatever the server sends for a plan ("1year", "1-year",
+ * "1 Year", "annual", etc. are all guesses -- only the presence of a "1" or
+ * "2" digit is load-bearing here) down to "1year"/"2year"/null. */
+private fun normalizedPlan(raw: String?): String? {
+    val v = raw?.lowercase()?.trim()
+    if (v.isNullOrBlank()) return null
+    return when {
+        v.contains("2") -> "2year"
+        v.contains("1") -> "1year"
+        else -> null
+    }
+}
+
+private fun planLabel(raw: String?): String? = when (normalizedPlan(raw)) {
+    "1year" -> "1-Year"
+    "2year" -> "2-Year"
+    else -> null
+}
+
+private val EXPIRY_FORMATS = listOf(
+    "yyyy-MM-dd'T'HH:mm:ss",
+    "yyyy-MM-dd HH:mm:ss",
+    "yyyy-MM-dd"
+)
+
+/** Parses [raw] against a few common date shapes and returns whole days
+ * from now until that date (negative if already past). Returns null if
+ * [raw] is blank or matches none of the tried formats -- callers must treat
+ * null as "unknown", never as "not expiring". */
+private fun daysUntilExpiry(raw: String?): Int? {
+    if (raw.isNullOrBlank()) return null
+    for (fmt in EXPIRY_FORMATS) {
+        try {
+            val sdf = java.text.SimpleDateFormat(fmt, java.util.Locale.US)
+            sdf.isLenient = false
+            val parsed = sdf.parse(raw.take(fmt.length.coerceAtMost(raw.length))) ?: continue
+            val diffMs = parsed.time - System.currentTimeMillis()
+            return floor(diffMs / 86_400_000.0).toInt()
+        } catch (e: Exception) {
+            // try the next format
+        }
+    }
+    return null
+}
+
+private enum class CredFilter(val label: String) {
+    ALL("All credentials"),
+    PLAN_1YR("1-Year subscribers"),
+    PLAN_2YR("2-Year subscribers"),
+    NEAR_EXPIRY("Near expiry (≤30 days)"),
+    FAILED_PREVIOUS("Failed previous login"),
+    UNTESTED("Never tested")
+}
+
+private enum class CredSort(val label: String) {
+    DEFAULT("(row order)"),
+    EXPIRY_SOON("Expiry: soonest first"),
+    PLAN_TYPE("Plan type"),
+    TEST_ISSUES_FIRST("Status: issues first"),
+    TEST_SUCCESS_FIRST("Status: success first")
+}
+
+private fun applyFilterAndSort(
+    list: List<CredentialEntry>,
+    filter: CredFilter,
+    sort: CredSort
+): List<CredentialEntry> {
+    var out = when (filter) {
+        CredFilter.ALL -> list
+        CredFilter.PLAN_1YR -> list.filter { normalizedPlan(it.planType) == "1year" }
+        CredFilter.PLAN_2YR -> list.filter { normalizedPlan(it.planType) == "2year" }
+        CredFilter.NEAR_EXPIRY -> list.filter {
+            val d = daysUntilExpiry(it.expiryDate)
+            d != null && d in 0..30
+        }
+        CredFilter.FAILED_PREVIOUS -> list.filter {
+            it.lastTestStatus == "failed" || it.lastTestStatus == "timeout"
+        }
+        CredFilter.UNTESTED -> list.filter { it.lastTestStatus.isNullOrBlank() }
+    }
+    out = when (sort) {
+        CredSort.DEFAULT -> out
+        CredSort.EXPIRY_SOON -> out.sortedWith(
+            compareBy(nullsLast()) { daysUntilExpiry(it.expiryDate) }
+        )
+        CredSort.PLAN_TYPE -> out.sortedWith(compareBy(nullsLast()) { normalizedPlan(it.planType) })
+        CredSort.TEST_ISSUES_FIRST -> out.sortedByDescending {
+            it.lastTestStatus == "failed" || it.lastTestStatus == "timeout"
+        }
+        CredSort.TEST_SUCCESS_FIRST -> out.sortedByDescending { it.lastTestStatus == "success" }
+    }
+    return out
 }
 
 private val PAGE_SIZE_OPTIONS = listOf(100, 200)
@@ -144,6 +264,17 @@ private val PAGE_SIZE_OPTIONS = listOf(100, 200)
  * what's shown, but selections made on any page are remembered
  * (selectedEntries, keyed by id) so admins can tick some on page 1, jump to
  * page 2, tick more, and still run all of them together.
+ *
+ * Round 66: a genuinely successful last-test now shows in green instead of
+ * the same neutral gray as untested, and a Filter/Sort control lets the
+ * admin narrow the current page down to 1-Year subscribers, 2-Year
+ * subscribers, credentials expiring within 30 days, or ones that failed
+ * their last automated login -- plus sort the visible list by expiry, plan,
+ * or test status. Filtering/sorting only ever reorders/hides rows already
+ * loaded on the current page; it never changes what's fetched from the
+ * server or what "Select page"/"Run Sequential Login" operate on (both now
+ * act on the filtered/sorted view, so ticking "Select page" after filtering
+ * to "Failed previous login" selects exactly those rows, not the full page).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -192,6 +323,11 @@ fun CredentialPickerScreen(
     var lastQuery by remember { mutableStateOf("") }
     var pageMenuOpen by remember { mutableStateOf(false) }
     var sizeMenuOpen by remember { mutableStateOf(false) }
+    // Round 66: client-side filter/sort over the currently loaded page.
+    var filterMode by remember { mutableStateOf(CredFilter.ALL) }
+    var sortMode by remember { mutableStateOf(CredSort.DEFAULT) }
+    var filterMenuOpen by remember { mutableStateOf(false) }
+    var sortMenuOpen by remember { mutableStateOf(false) }
 
     fun runSearch(q: String, page: Int, size: Int) {
         val apiToken = session.apiToken
@@ -223,6 +359,9 @@ fun CredentialPickerScreen(
     LaunchedEffect(Unit) { runSearch("", page = 1, size = pageSize) }
 
     val totalPages = maxOf(1, ceil(totalMatching.toDouble() / pageSize).toInt())
+    val displayedCredentials = remember(credentials, filterMode, sortMode) {
+        applyFilterAndSort(credentials, filterMode, sortMode)
+    }
     val loginableCount = selectedEntries.count {
         !it.value.username.isNullOrBlank() && !it.value.password.isNullOrBlank()
     }
@@ -387,7 +526,7 @@ fun CredentialPickerScreen(
             // an earlier page are kept even after moving to another one.
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = {
-                    selectedEntries = selectedEntries + credentials
+                    selectedEntries = selectedEntries + displayedCredentials
                         .filter { !it.username.isNullOrBlank() && !it.password.isNullOrBlank() }
                         .associateBy { it.id }
                 }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) { Text("Select page") }
@@ -430,8 +569,51 @@ fun CredentialPickerScreen(
                     }
                 }
             }
+
+            // Round 66: Filter/Sort row -- narrows and reorders the
+            // CURRENTLY LOADED page only (never re-queries the server).
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+                Box {
+                    TextButton(onClick = { filterMenuOpen = true }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) {
+                        Text("Filter: ${filterMode.label}", style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    DropdownMenu(expanded = filterMenuOpen, onDismissRequest = { filterMenuOpen = false }) {
+                        CredFilter.values().forEach { f ->
+                            DropdownMenuItem(
+                                text = { Text(f.label) },
+                                onClick = {
+                                    filterMenuOpen = false
+                                    filterMode = f
+                                }
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.width(4.dp))
+                Box {
+                    TextButton(onClick = { sortMenuOpen = true }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)) {
+                        Text("Sort: ${sortMode.label}", style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    DropdownMenu(expanded = sortMenuOpen, onDismissRequest = { sortMenuOpen = false }) {
+                        CredSort.values().forEach { s ->
+                            DropdownMenuItem(
+                                text = { Text(s.label) },
+                                onClick = {
+                                    sortMenuOpen = false
+                                    sortMode = s
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+
             Text(
-                "$totalMatching total matching · ${selectedEntries.size} selected overall",
+                if (filterMode == CredFilter.ALL) {
+                    "$totalMatching total matching · ${selectedEntries.size} selected overall"
+                } else {
+                    "$totalMatching total matching · ${displayedCredentials.size} shown (filtered) · ${selectedEntries.size} selected overall"
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -449,18 +631,20 @@ fun CredentialPickerScreen(
                 ) {
                     CircularProgressIndicator()
                 }
-            } else if (credentials.isEmpty()) {
+            } else if (displayedCredentials.isEmpty()) {
                 Text(
-                    "No credentials found.",
+                    if (credentials.isEmpty()) "No credentials found." else "No credentials on this page match \"${filterMode.label}\".",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             } else {
                 LazyColumn(modifier = Modifier.weight(1f)) {
-                    items(credentials, key = { it.id }) { cred ->
+                    items(displayedCredentials, key = { it.id }) { cred ->
                         val revealed = revealedIds.contains(cred.id)
                         val checked = selectedEntries.containsKey(cred.id)
-                        val (testLabel, testIsProblem) = testSummary(cred)
+                        val (testLabel, testTone) = testSummary(cred)
+                        val expiryDays = daysUntilExpiry(cred.expiryDate)
+                        val plan = planLabel(cred.planType)
                         Card(modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
                             Column(modifier = Modifier.padding(10.dp)) {
                                 Row(
@@ -511,15 +695,51 @@ fun CredentialPickerScreen(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
+                                // Round 66: plan + expiry line -- only shown
+                                // when the server actually sent one of those
+                                // fields for this credential; near-expiry
+                                // (<=30 days, including already-past) is
+                                // called out in amber/red the same way the
+                                // web Hub does.
+                                if (plan != null || expiryDays != null) {
+                                    Text(
+                                        buildString {
+                                            if (plan != null) append("Plan: $plan")
+                                            if (plan != null && expiryDays != null) append(" · ")
+                                            if (expiryDays != null) {
+                                                append(cred.expiryDate ?: "")
+                                                append(
+                                                    when {
+                                                        expiryDays < 0 -> " (expired)"
+                                                        expiryDays == 0 -> " (expires today)"
+                                                        else -> " ($expiryDays days left)"
+                                                    }
+                                                )
+                                            }
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (expiryDays != null && expiryDays <= 30) {
+                                            MaterialTheme.colorScheme.error
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        }
+                                    )
+                                }
                                 // Round 48n(d): each card now shows its own
                                 // last automated sign-in test result, synced
                                 // from the exact same data the web Hub's
-                                // Sign-In Test column reads.
+                                // Sign-In Test column reads. Round 66: a real
+                                // SUCCESS now renders in green rather than
+                                // the same gray as an untested row.
                                 Text(
                                     testLabel,
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = if (testIsProblem) MaterialTheme.colorScheme.error
-                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    color = when (testTone) {
+                                        TestTone.PROBLEM -> MaterialTheme.colorScheme.error
+                                        TestTone.SUCCESS -> Color(0xFF2E7D32)
+                                        TestTone.NEUTRAL -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                    fontWeight = if (testTone == TestTone.SUCCESS) FontWeight.SemiBold else FontWeight.Normal,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
