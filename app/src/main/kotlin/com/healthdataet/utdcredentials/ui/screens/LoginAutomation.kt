@@ -511,8 +511,12 @@ fun reportLoginOutcome(
         is LoginAttemptOutcome.Skipped -> "skipped" to null
     }
 
-    if (context != null && sourceId != null) {
-        val (source, id) = sourceId
+    if (context != null && (sourceId != null || !username.isNullOrBlank())) {
+        // Sequential runs may not have the server's source/id pair because
+        // that screen receives only the credential pair. Keep those attempts
+        // in the same on-device history anyway, using a stable local key.
+        val localSourceId = sourceId ?: ("sequential" to (username!!.hashCode().toLong() and 0x7fffffffL))
+        val (source, id) = localSourceId
         try {
             LoginHistoryStore.record(context, source, id, ucCode, username, status, reason)
         } catch (e: Exception) {
