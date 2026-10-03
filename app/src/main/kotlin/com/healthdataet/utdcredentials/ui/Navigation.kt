@@ -174,6 +174,7 @@ fun AppNavHost() {
                 onOpenSecurity = { navController.navigate(ROUTE_SECURITY) },
                 onOpenDiagnostics = { navController.navigate(ROUTE_DIAGNOSTICS) },
                 onOpenCredentialLogin = { navController.navigate(ROUTE_CREDENTIAL_PICKER) },
+                onOpenLoginHistory = { navController.navigate(ROUTE_LOGIN_HISTORY) },
                 onOpenOfflineData = { navController.navigate(ROUTE_LOCAL_BACKUP) }
             )
         }
@@ -200,6 +201,9 @@ fun AppNavHost() {
         }
         composable(ROUTE_SEQUENTIAL_LOGIN) {
             SequentialLoginScreen(session = session, onBack = { navController.popBackStack() })
+        }
+        composable(ROUTE_LOGIN_HISTORY) {
+            LoginHistoryScreen(onBack = { navController.popBackStack() })
         }
         composable(ROUTE_LOGIN_HISTORY) {
             LoginHistoryScreen(onBack = { navController.popBackStack() })
