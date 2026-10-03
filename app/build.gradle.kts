@@ -457,8 +457,8 @@ android {
         // existing "can't reach the admin panel" fallback page -- both
         // jump straight to the native offline screens without touching
         // the site's own HTML/JS at all.
-        versionCode = 35
-        versionName = "1.4.29"
+        versionCode = 36
+        versionName = "1.4.30"
         buildConfigField("String", "GIT_SHA", "\"${gitShaForBuild()}\"")
     }
 
