@@ -53,6 +53,7 @@ fun AppSettingsScreen(
     onOpenSecurity: () -> Unit,
     onOpenDiagnostics: () -> Unit,
     onOpenCredentialLogin: () -> Unit,
+    onOpenLoginHistory: () -> Unit,
     onOpenOfflineData: () -> Unit
 ) {
     val context = LocalContext.current
@@ -115,6 +116,12 @@ fun AppSettingsScreen(
             // with automatic sync (and, when the same record changed both
             // places, a conflict prompt) once back online -- plus the
             // on-device local backup.
+            HorizontalDivider()
+            SettingsLinkRow(
+                title = "UpToDate Quick Login History",
+                subtitle = "View every automated login attempt, date, success, failure and failure reason",
+                onClick = onOpenLoginHistory
+            )
             SettingsLinkRow(
                 title = "Offline Data & Local Backup",
                 subtitle = "Add or edit users/credentials with no connection, auto-sync on " +
