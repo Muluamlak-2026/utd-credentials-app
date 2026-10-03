@@ -47,12 +47,20 @@ object NotificationChannels {
      * (paid plan lapsing) both fold into the one "Expiry" channel, since a
      * single "expiry" sound covering that whole family is what was asked
      * for, rather than two separately-configurable ones. */
-    fun channelIdForServerType(serverType: String?): String = when (serverType) {
-        "registration" -> CATEGORY_REGISTRATION
-        "trial_start" -> CATEGORY_TRIAL_START
-        "trial_end", "subscription_expired" -> CATEGORY_EXPIRY
-        "payment" -> CATEGORY_PAYMENT
+    fun channelIdForServerType(serverType: String?): String = when (serverType?.trim()?.lowercase()) {
+        "registration", "new_registration", "new_registry", "registry", "registered" -> CATEGORY_REGISTRATION
+        "trial_start", "trial_started", "trial_begin", "trial_begun" -> CATEGORY_TRIAL_START
+        "trial_end", "trial_expiry", "trial_expired", "subscription_expired", "subscription_expiry" -> CATEGORY_EXPIRY
+        "payment", "payment_submitted", "payment_submission", "payment_received" -> CATEGORY_PAYMENT
         else -> CATEGORY_GENERAL
+    }
+
+    fun defaultTitleForServerType(serverType: String?): String = when (channelIdForServerType(serverType)) {
+        CATEGORY_REGISTRATION -> "New Registration"
+        CATEGORY_TRIAL_START -> "Trial Started"
+        CATEGORY_EXPIRY -> "Trial / Subscription Expiry"
+        CATEGORY_PAYMENT -> "Payment Submitted"
+        else -> "UTD Credentials"
     }
 
     fun labelFor(category: String): String = when (category) {
@@ -207,6 +215,16 @@ object NotificationChannels {
      */
     fun postSystemNotification(context: Context, title: String, body: String, serverType: String?, notificationId: Int) {
         val channelId = channelIdForServerType(serverType)
+        val effectiveTitle = title.ifBlank { defaultTitleForServerType(serverType) }
+        val effectiveBody = body.ifBlank {
+            when (channelId) {
+                CATEGORY_REGISTRATION -> "A new registration is available."
+                CATEGORY_TRIAL_START -> "A trial has started."
+                CATEGORY_EXPIRY -> "A trial or subscription is expiring."
+                CATEGORY_PAYMENT -> "A payment submission was received."
+                else -> "New notification"
+            }
+        }
         // Round 33: per-category on/off, checked before anything else --
         // a disabled category is silent across FCM, the foreground poll
         // loop, and the WorkManager backstop alike, since all three call
@@ -236,8 +254,8 @@ object NotificationChannels {
         )
         val builder = NotificationCompat.Builder(context, channelId)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(title)
-            .setContentText(body)
+            .setContentTitle(effectiveTitle)
+            .setContentText(effectiveBody)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
