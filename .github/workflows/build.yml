@@ -17,10 +17,20 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # The GitHub Ubuntu runner already ships with Android SDK command-line
+      # tools. Do not use android-actions/setup-android@v3 here: its current
+      # "tools" package request is obsolete and fails on today's SDK repository.
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        shell: bash
+        run: |
+          SDK_ROOT="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
 
       - name: Install required SDK packages
+        shell: bash
         run: |
           yes | sdkmanager --licenses > /dev/null || true
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
