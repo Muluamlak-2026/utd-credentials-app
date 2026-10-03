@@ -61,11 +61,11 @@ class PollIntervalPrefs(context: Context) {
         private const val KEY_BACKGROUND_MINUTES = "background_minutes"
         private const val KEY_APPLIED_BACKGROUND_MINUTES = "applied_background_minutes"
 
-        const val DEFAULT_FOREGROUND_SECONDS = 30
+        const val DEFAULT_FOREGROUND_SECONDS = 60
         const val MIN_FOREGROUND_SECONDS = 10
         const val MAX_FOREGROUND_SECONDS = 300
 
-        const val DEFAULT_BACKGROUND_MINUTES = 15
+        const val DEFAULT_BACKGROUND_MINUTES = 60
         // Android's real, hard, documented OS-level floor for ANY app's
         // PeriodicWorkRequest -- see androidx.work.PeriodicWorkRequest's own
         // MIN_PERIODIC_INTERVAL_MILLIS. WorkManager silently clamps anything
