@@ -38,7 +38,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.healthdataet.utdcredentials.data.PendingUpToDateLogin
 import com.healthdataet.utdcredentials.data.SessionManager
-import kotlinx.coroutines.delay
 
 /**
  * Round 48i: the WebView half of the UpToDate quick-login feature --
@@ -101,15 +100,6 @@ fun UpToDateLoginScreen(session: SessionManager, onBack: () -> Unit) {
 
     BackHandler(enabled = canGoBack) {
         webViewRef?.let { if (it.canGoBack()) it.goBack() }
-    }
-
-    LaunchedEffect(attemptGeneration) {
-        if (username.isNullOrBlank() || password.isNullOrBlank()) {
-            resolveOnce(LoginAttemptOutcome.Skipped)
-            return@LaunchedEffect
-        }
-        delay(ATTEMPT_TIMEOUT_MS)
-        resolveOnce(LoginAttemptOutcome.TimedOut)
     }
 
     Scaffold(
